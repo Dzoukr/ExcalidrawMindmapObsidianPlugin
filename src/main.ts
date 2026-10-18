@@ -1,20 +1,21 @@
 import { App, ItemView, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
 import {
-  Direction, addChild, addSibling, commitEditing, deleteNode, editNode, editingNode, moveNode, navigate, newMap,
-  relayout, resetLayout, selectedNode,
+  Direction, addChild, addSibling, addSummary, canSummarize, commitEditing, deleteNode, editNode, editingNode, moveNode,
+  navigate, newMap, relayout, resetLayout, selectedNode, selectedNodes,
 } from "./actions";
 import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { nodeData } from "./model";
 import { FloatingPanel, PanelActions } from "./panel";
-import { Colors, DEFAULT_COLORS, setColors } from "./styles";
+import { Colors, DEFAULT_COLORS, setArrows, setColors } from "./styles";
 
 interface Settings {
   showPanelOnDesktop: boolean;
   allowDeleteCentralTopic: boolean;
+  arrows: boolean; // connectors end in an arrowhead instead of a plain line
   colors: Colors;
 }
 
-const DEFAULT_SETTINGS: Settings = { showPanelOnDesktop: true, allowDeleteCentralTopic: false, colors: DEFAULT_COLORS };
+const DEFAULT_SETTINGS: Settings = { showPanelOnDesktop: true, allowDeleteCentralTopic: false, arrows: false, colors: DEFAULT_COLORS };
 
 /** Saved settings over the defaults; colors are merged per field so new color options get their default. */
 function mergeSettings(saved: Partial<Settings> | null): Settings {
@@ -22,6 +23,7 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
   const colors: Colors = structuredClone({
     central: { ...DEFAULT_COLORS.central, ...c.central },
     topicText: c.topicText ?? DEFAULT_COLORS.topicText,
+    summary: { ...DEFAULT_COLORS.summary, ...c.summary },
     branches: c.branches?.length ? c.branches : DEFAULT_COLORS.branches,
   });
   return { ...DEFAULT_SETTINGS, ...saved, colors };
@@ -53,6 +55,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   async onload() {
     this.settings = mergeSettings(await this.loadData());
     setColors(this.settings.colors);
+    setArrows(this.settings.arrows);
     this.addSettingTab(new MindMapSettingTab(this.app, this));
 
     this.keyScope = new Scope(this.app.scope);
@@ -85,6 +88,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       checkCallback: (checking) => this.withActiveView(checking, (v) => newMap(v)),
     });
     this.addCommand({
+      id: "add-summary",
+      name: "Add summary to selected topics",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.summarize(v)),
+    });
+    this.addCommand({
       id: "relayout",
       name: "Refresh mind map layout (keep moved topics)",
       checkCallback: (checking) => this.withActiveView(checking, (v) => relayout(v, selectedNode(v)?.id)),
@@ -105,6 +113,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
   async saveSettings() {
     setColors(this.settings.colors);
+    setArrows(this.settings.arrows);
     await this.saveData(this.settings);
     for (const s of this.states.values()) this.refreshPanel(s);
   }
@@ -212,10 +221,14 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const visible = (Platform.isMobile || this.settings.showPanelOnDesktop) && !s.api.getAppState().viewModeEnabled;
     s.panel.setVisible(visible);
     if (!visible) return;
-    const node = editingNode(s.view) ?? selectedNode(s.view);
+    const editing = editingNode(s.view);
+    const selected = editing ? [editing] : selectedNodes(s.view);
+    const node = selected.length === 1 ? selected[0] : null;
     s.panel.update({
       node: !!node,
       root: !!node && nodeData(node)?.parent === null,
+      summary: !!node && !!nodeData(node)?.summary,
+      canSummarize: canSummarize(selected),
       canDeleteRoot: this.settings.allowDeleteCentralTopic,
     });
   }
@@ -238,12 +251,19 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (node) action(node.id);
   }
 
+  /** Adds a summary spanning the selected topics, or the topic being edited. */
+  private summarize(view: ExcalidrawView) {
+    if (editingNode(view)) return this.runOnNode(view, (id) => addSummary(view, [id]));
+    addSummary(view, selectedNodes(view).map((n) => n.id));
+  }
+
   private panelActions(view: ExcalidrawView): PanelActions {
     const on = (action: (id: string) => unknown) => () => this.runOnNode(view, action);
     return {
       newMap: () => newMap(view),
       addChild: on((id) => addChild(view, id)),
       addSibling: on((id) => addSibling(view, id, false)),
+      addSummary: () => this.summarize(view),
       edit: on((id) => editNode(view, id)),
       remove: on((id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic)),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
@@ -337,6 +357,15 @@ class MindMapSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }),
       );
+    new Setting(this.containerEl)
+      .setName("Arrows instead of lines")
+      .setDesc("Connectors point to the subtopic with an arrowhead. Used for connectors created from now on.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.arrows).onChange(async (v) => {
+          this.plugin.settings.arrows = v;
+          await this.plugin.saveSettings();
+        }),
+      );
     this.displayColors();
   }
 
@@ -365,6 +394,11 @@ class MindMapSettingTab extends PluginSettingTab {
 
     picker(new Setting(el).setName("Topic text").setDesc("Text of main topics and subtopics."),
       "Text", () => colors.topicText, (v) => (colors.topicText = v));
+
+    const summary = new Setting(el).setName("Summary").setDesc("Text, border and brace, background.");
+    picker(summary, "Text", () => colors.summary.text, (v) => (colors.summary.text = v));
+    picker(summary, "Border and brace", () => colors.summary.border, (v) => (colors.summary.border = v));
+    picker(summary, "Background", () => colors.summary.fill, (v) => (colors.summary.fill = v));
 
     colors.branches.forEach((b, i) => {
       const s = new Setting(el)

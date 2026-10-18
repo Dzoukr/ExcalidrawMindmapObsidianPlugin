@@ -5,6 +5,7 @@ export interface PanelActions {
   newMap(): void;
   addChild(): void;
   addSibling(): void;
+  addSummary(): void;
   edit(): void;
   remove(): void;
   nav(dir: Direction): void;
@@ -15,10 +16,12 @@ export interface PanelActions {
 export interface PanelState {
   node: boolean; // a mind map node is selected or being edited
   root: boolean; // that node is the central topic
+  summary: boolean; // that node is a summary topic
+  canSummarize: boolean; // the selection is one or more sibling topics that can get a summary
   canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed
 }
 
-type Key = "newMap" | "child" | "sibling" | "edit" | "remove" | "left" | "up" | "down" | "right" | "layout";
+type Key = "newMap" | "child" | "sibling" | "summary" | "edit" | "remove" | "left" | "up" | "down" | "right" | "layout";
 
 /** Floating control bar docked at the bottom of an Excalidraw view. */
 export class FloatingPanel {
@@ -45,6 +48,7 @@ export class FloatingPanel {
     const g2 = group();
     button(g2, "child", "corner-down-right", "Add child (Tab / Insert)", a.addChild);
     button(g2, "sibling", "plus", "Add sibling (Enter)", a.addSibling);
+    button(g2, "summary", "braces", "Add summary of the selected topics", a.addSummary);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
     const g3 = group();
@@ -75,7 +79,8 @@ export class FloatingPanel {
   update(s: PanelState) {
     const set = (k: Key, enabled: boolean) => (this.buttons.get(k)!.disabled = !enabled);
     for (const k of ["child", "edit", "left", "up", "down", "right"] as Key[]) set(k, s.node);
-    set("sibling", s.node && !s.root);
+    set("sibling", s.node && !s.root && !s.summary);
+    set("summary", s.canSummarize);
     set("remove", s.node && (!s.root || s.canDeleteRoot));
     set("up", s.node && !s.root);
     set("down", s.node && !s.root);

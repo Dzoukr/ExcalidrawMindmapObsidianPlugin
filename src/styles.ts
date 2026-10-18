@@ -16,12 +16,14 @@ export interface NodeStyle {
 export interface Colors {
   central: { text: string; border: string; fill: string };
   topicText: string; // text of main topics and subtopics
+  summary: { text: string; border: string; fill: string }; // border also colors the brace
   branches: Branch[]; // cycled through for the main topics of a map
 }
 
 export const DEFAULT_COLORS: Colors = {
   central: { text: "#ffffff", border: "#1e1e1e", fill: "#1e1e1e" },
   topicText: "#1e1e1e",
+  summary: { text: "#1e1e1e", border: "#1e1e1e", fill: "#ffffff" },
   branches: [
     { stroke: "#e03131", fill: "#ffc9c9" },
     { stroke: "#1971c2", fill: "#a5d8ff" },
@@ -39,6 +41,15 @@ export function setColors(c: Colors) {
   colors = c;
 }
 
+/** Whether new connectors end in an arrowhead at the child; also from the plugin settings. */
+let arrows = false;
+
+export function setArrows(v: boolean) {
+  arrows = v;
+}
+
+export const connectorArrowhead = () => (arrows ? "arrow" : null);
+
 /** Branch colors for the i-th main topic of a map. */
 export function branchColor(i: number): Branch {
   const b = colors.branches.length ? colors.branches : DEFAULT_COLORS.branches;
@@ -46,6 +57,7 @@ export function branchColor(i: number): Branch {
 }
 
 export const DEFAULT_TEXT = ["Central Topic", "Main Topic", "Subtopic"];
+export const SUMMARY_TEXT = "Summary";
 export const MIN_TEXT_WIDTH = 24;
 
 export function paddingFor(depth: number): { padX: number; padY: number } {
@@ -61,4 +73,12 @@ export function styleFor(depth: number, branch: Branch): NodeStyle {
   if (depth === 1)
     return { fontSize: 20, textColor: colors.topicText, borderColor: branch.stroke, backgroundColor: branch.fill, strokeWidth: 2, edgeWidth: 2, ...pad };
   return { fontSize: 16, textColor: colors.topicText, borderColor: branch.stroke, backgroundColor: "transparent", strokeWidth: 1, edgeWidth: 1, ...pad };
+}
+
+export const SUMMARY_PADDING = { padX: 16, padY: 8 };
+
+/** Summary topics use their own colors, whatever the branch. */
+export function summaryStyle(): NodeStyle {
+  const c = colors.summary;
+  return { fontSize: 16, textColor: c.text, borderColor: c.border, backgroundColor: c.fill, strokeWidth: 2, edgeWidth: 2, ...SUMMARY_PADDING };
 }

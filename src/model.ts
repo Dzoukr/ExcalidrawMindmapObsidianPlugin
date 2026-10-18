@@ -10,6 +10,7 @@ export interface NodeData {
   parent: string | null;
   order: number;
   side?: Side; // level-1 nodes only
+  summary?: string[]; // summary topic: ids of the siblings it spans, the range runs from the first to the last still present
   ox?: number; // manual offset
   oy?: number;
   lx?: number; // last position placed by layout
@@ -23,12 +24,25 @@ export interface EdgeData {
   child: string;
 }
 
+export interface BraceData {
+  brace: true;
+  root: string;
+  summary: string;
+}
+
+export interface MMSummary {
+  node: MMNode;
+  covers: string[];
+}
+
 export interface MMNode extends LNode {
   el: El;
   text: El | null;
   data: NodeData;
   parent: MMNode | null;
   children: MMNode[];
+  summaries: MMSummary[];
+  covers: string[] | null; // set on summary topics: the siblings they span
   depth: number;
 }
 
@@ -37,6 +51,8 @@ export interface MindMap {
   nodes: Map<string, MMNode>;
   edges: Map<string, El>; // child id -> connector
   strayEdges: El[];
+  braces: Map<string, El>; // summary id -> brace
+  strayBraces: El[];
 }
 
 export function nodeData(el: El | undefined | null): NodeData | null {
@@ -48,6 +64,11 @@ export function nodeData(el: El | undefined | null): NodeData | null {
 export function edgeData(el: El | undefined | null): EdgeData | null {
   const d = el?.customData?.[KEY];
   return d?.edge ? (d as EdgeData) : null;
+}
+
+export function braceData(el: El | undefined | null): BraceData | null {
+  const d = el?.customData?.[KEY];
+  return d?.brace ? (d as BraceData) : null;
 }
 
 export function boundTextId(el: El): string | undefined {
@@ -77,25 +98,50 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     const text = tid ? byId.get(tid) : undefined;
     nodes.set(el.id, {
       id: el.id, el, data, text: text && !text.isDeleted ? text : null,
-      parent: null, children: [], depth: 0, side: null,
+      parent: null, children: [], summaries: [], covers: null, depth: 0, side: null,
     });
   }
   const root = nodes.get(rootId)!;
+  const summaries: MMNode[] = [];
   for (const n of nodes.values()) {
     if (n === root) continue;
     let p = n.data.parent ? nodes.get(n.data.parent) : undefined;
     if (!p || p === n) p = root; // orphan after manual deletion: reattach to root
     n.parent = p;
-    p.children.push(n);
+    if (n.data.summary && p.id === n.data.parent) summaries.push(n);
+    else p.children.push(n);
+  }
+
+  // A summary spans the siblings (on its side) from the first to the last one it lists that still exist.
+  // Without any, it stays as an ordinary topic.
+  const sideOf = (n: MMNode) => n.data.side ?? "R";
+  for (const s of summaries) {
+    const p = s.parent!;
+    const sibs = p.children
+      .filter((c) => p !== root || sideOf(c) === sideOf(s))
+      .sort((a, b) => a.data.order - b.data.order);
+    const idx = s.data.summary!.map((id) => sibs.findIndex((c) => c.id === id)).filter((i) => i >= 0);
+    if (!idx.length) {
+      p.children.push(s);
+      continue;
+    }
+    s.covers = sibs.slice(Math.min(...idx), Math.max(...idx) + 1).map((c) => c.id);
+    p.summaries.push({ node: s, covers: s.covers });
   }
 
   // Break cycles from corrupted data: anything unreachable from the root hangs off the root.
   const reached = new Set<string>();
-  const walk = (n: MMNode) => { reached.add(n.id); n.children.forEach(walk); };
+  const walk = (n: MMNode) => {
+    reached.add(n.id);
+    n.children.forEach(walk);
+    n.summaries.forEach((s) => walk(s.node));
+  };
   walk(root);
   for (const n of nodes.values()) {
     if (reached.has(n.id)) continue;
     n.parent!.children = n.parent!.children.filter((c) => c !== n);
+    n.parent!.summaries = n.parent!.summaries.filter((s) => s.node !== n);
+    n.covers = null;
     n.parent = root;
     root.children.push(n);
     walk(n);
@@ -105,7 +151,8 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     n.depth = depth;
     n.side = side;
     n.children.sort((a, b) => a.data.order - b.data.order);
-    for (const c of n.children) finish(c, depth + 1, depth === 0 ? (c.data.side ?? "R") : side);
+    for (const c of n.children) finish(c, depth + 1, depth === 0 ? sideOf(c) : side);
+    for (const s of n.summaries) finish(s.node, depth + 1, depth === 0 ? sideOf(s.node) : side);
   };
   finish(root, 0, null);
 
@@ -116,15 +163,30 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     const d = edgeData(el);
     if (!d || d.root !== rootId) continue;
     const child = nodes.get(d.child);
-    if (child && child.parent?.id === d.parent && !edges.has(d.child)) edges.set(d.child, el);
+    if (child && !child.covers && child.parent?.id === d.parent && !edges.has(d.child)) edges.set(d.child, el);
     else strayEdges.push(el);
   }
-  return { root, nodes, edges, strayEdges };
+
+  const braces = new Map<string, El>();
+  const strayBraces: El[] = [];
+  for (const el of elements) {
+    if (el.isDeleted) continue;
+    const d = braceData(el);
+    if (!d || d.root !== rootId) continue;
+    if (nodes.get(d.summary)?.covers && !braces.has(d.summary)) braces.set(d.summary, el);
+    else strayBraces.push(el);
+  }
+  return { root, nodes, edges, strayEdges, braces, strayBraces };
 }
 
+/** The node with its children and summaries, recursively. */
 export function subtree(n: MMNode): MMNode[] {
   const out: MMNode[] = [];
-  const walk = (x: MMNode) => { out.push(x); x.children.forEach(walk); };
+  const walk = (x: MMNode) => {
+    out.push(x);
+    x.children.forEach(walk);
+    x.summaries.forEach((s) => walk(s.node));
+  };
   walk(n);
   return out;
 }
