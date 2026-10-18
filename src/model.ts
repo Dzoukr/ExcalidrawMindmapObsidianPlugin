@@ -60,6 +60,13 @@ export interface BadgeData {
   node: string;
 }
 
+export interface HiddenState {
+  opacity: number;
+  locked: boolean;
+  link?: string | null;
+  hasTextLink?: boolean;
+}
+
 export interface MMBadge {
   el: El;
   text: El | null;
@@ -108,35 +115,52 @@ export interface MindMap {
   strayBadges: El[];
 }
 
-export function nodeData(el: El | undefined | null): NodeData | null {
+/** The mind map data stored on the element, not yet known to be of any particular kind. */
+function stored(el: El | undefined | null): Record<string, unknown> | null {
   const d = el?.customData?.[KEY];
-  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.relation || d.self !== el!.id) return null;
-  return d as NodeData;
+  return d && typeof d === "object" ? (d as Record<string, unknown>) : null;
+}
+
+export function nodeData(el: El | undefined | null): NodeData | null {
+  const d = stored(el);
+  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.relation || d.self !== el?.id) return null;
+  return d as unknown as NodeData;
 }
 
 export function edgeData(el: El | undefined | null): EdgeData | null {
-  const d = el?.customData?.[KEY];
-  return d?.edge ? (d as EdgeData) : null;
+  const d = stored(el);
+  return d?.edge ? (d as unknown as EdgeData) : null;
 }
 
 export function boundaryData(el: El | undefined | null): BoundaryData | null {
-  const d = el?.customData?.[KEY];
-  return d?.boundary === true && d.self === el!.id ? (d as BoundaryData) : null; // a title's `boundary` is its frame id
+  const d = stored(el);
+  return d?.boundary === true && d.self === el?.id ? (d as unknown as BoundaryData) : null; // a title's `boundary` is its frame id
 }
 
 export function titleData(el: El | undefined | null): TitleData | null {
-  const d = el?.customData?.[KEY];
-  return d?.boundaryTitle && d.self === el!.id ? (d as TitleData) : null;
+  const d = stored(el);
+  return d?.boundaryTitle && d.self === el?.id ? (d as unknown as TitleData) : null;
 }
 
 export function relationData(el: El | undefined | null): RelationData | null {
-  const d = el?.customData?.[KEY];
-  return d?.relation && d.self === el!.id ? (d as RelationData) : null;
+  const d = stored(el);
+  return d?.relation && d.self === el?.id ? (d as unknown as RelationData) : null;
 }
 
 export function badgeData(el: El | undefined | null): BadgeData | null {
-  const d = el?.customData?.[KEY];
-  return d?.badge && d.self === el!.id ? (d as BadgeData) : null;
+  const d = stored(el);
+  return d?.badge && d.self === el?.id ? (d as unknown as BadgeData) : null;
+}
+
+/** Whether the element is a relationship label already given the label color. */
+export function isRelationLabel(el: El | undefined | null): boolean {
+  return !!stored(el)?.relationLabel;
+}
+
+/** Opacity, lock and link an element hidden by a folded topic had before, to restore when shown again. */
+export function hiddenState(el: El | undefined | null): HiddenState | null {
+  const h = el?.customData?.[HIDDEN_KEY];
+  return h && typeof h === "object" ? (h as HiddenState) : null;
 }
 
 /** Root id of the map a node, boundary frame or boundary title belongs to. */
@@ -145,8 +169,8 @@ export function rootIdOf(el: El | undefined | null): string | null {
 }
 
 export function braceData(el: El | undefined | null): BraceData | null {
-  const d = el?.customData?.[KEY];
-  return d?.brace ? (d as BraceData) : null;
+  const d = stored(el);
+  return d?.brace ? (d as unknown as BraceData) : null;
 }
 
 export function boundTextId(el: El): string | undefined {

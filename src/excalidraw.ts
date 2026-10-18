@@ -2,6 +2,10 @@ import { ItemView, TFile, View } from "obsidian";
 
 // Minimal typings for the parts of the Excalidraw plugin this plugin touches.
 
+export interface Binding {
+  elementId: string;
+}
+
 export type El = {
   id: string;
   type: string;
@@ -9,22 +13,76 @@ export type El = {
   y: number;
   width: number;
   height: number;
+  angle?: number;
   isDeleted?: boolean;
   version?: number;
-  customData?: Record<string, any>;
+  versionNonce?: number;
+  updated?: number;
+  customData?: Record<string, unknown>;
   boundElements?: { id: string; type: string }[] | null;
   containerId?: string | null;
-  [key: string]: any;
+  strokeColor: string;
+  backgroundColor: string;
+  fillStyle?: string;
+  strokeWidth?: number;
+  strokeStyle?: string;
+  roughness: number;
+  opacity?: number;
+  locked?: boolean;
+  link?: string | null;
+  hasTextLink?: boolean;
+  // lines and arrows
+  points?: number[][];
+  startBinding?: Binding | null;
+  endBinding?: Binding | null;
+  startArrowhead?: string | null;
+  endArrowhead?: string | null;
+  // text
+  text?: string;
+  originalText?: string;
+  rawText?: string;
+  fontFamily?: number;
+  fontSize?: number;
+  textAlign?: string;
+  verticalAlign?: string;
 };
+
+export interface AppState {
+  selectedElementIds?: Record<string, boolean>;
+  editingTextElement?: El | null;
+  viewModeEnabled?: boolean;
+  zoom?: { value: number };
+  scrollX: number;
+  scrollY: number;
+  width: number;
+  height: number;
+  currentItemFontFamily: number;
+  currentItemRoughness: number;
+}
 
 export type CaptureUpdate = "IMMEDIATELY" | "NEVER" | "EVENTUALLY";
 
 export interface ExcalidrawAPI {
   getSceneElements(): readonly El[];
   getSceneElementsIncludingDeleted(): readonly El[];
-  getAppState(): any;
-  updateScene(scene: { elements?: readonly El[]; appState?: any; captureUpdate?: CaptureUpdate }): void;
-  onChange?(cb: (elements: readonly El[], appState: any, files: any) => void): () => void;
+  getAppState(): AppState;
+  updateScene(scene: { elements?: readonly El[]; appState?: Partial<AppState>; captureUpdate?: CaptureUpdate }): void;
+  onChange?(cb: (elements: readonly El[], appState: AppState, files: unknown) => void): () => void;
+}
+
+/** The parts of the Excalidraw plugin's ExcalidrawAutomate scripting API this plugin uses. */
+export interface ExcalidrawAutomate {
+  style: Record<string, unknown>;
+  clear(): void;
+  addText(x: number, y: number, text: string, opts?: Record<string, unknown>): string;
+  addArrow(points: number[][], opts?: Record<string, unknown>): string;
+  addLine(points: number[][]): string;
+  addRect(x: number, y: number, width: number, height: number): string;
+  getElement(id: string): El;
+  getElements(): El[];
+  measureText(text: string): { width: number; height: number };
+  selectElementsInView(ids: string[]): void;
+  destroy?(): void;
 }
 
 export interface ExcalidrawView extends ItemView {
@@ -39,8 +97,8 @@ export function isExcalidrawView(v: unknown): v is ExcalidrawView {
 }
 
 /** Returns a fresh ExcalidrawAutomate instance targeting the view, or null when Excalidraw is not loaded. */
-export function getEA(view: ExcalidrawView): any | null {
-  const global = (window as any).ExcalidrawAutomate;
+export function getEA(view: ExcalidrawView): ExcalidrawAutomate | null {
+  const global = (window as { ExcalidrawAutomate?: { getAPI?(view: ExcalidrawView): ExcalidrawAutomate } }).ExcalidrawAutomate;
   if (!global?.getAPI) return null;
   return global.getAPI(view);
 }

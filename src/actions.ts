@@ -1,11 +1,11 @@
 import { Notice } from "obsidian";
-import { El, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
+import { El, ExcalidrawAutomate, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import {
   Box, Brace, RELATION_BEND, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
 } from "./layout";
 import {
-  HIDDEN_KEY, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, braceData, buildMap,
-  edgeData, isHidden, nodeData, relationData, resolveNodeElement, rootIdOf, subtree, titleData,
+  HIDDEN_KEY, HiddenState, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, braceData, buildMap,
+  edgeData, hiddenState, isHidden, isRelationLabel, nodeData, relationData, resolveNodeElement, rootIdOf, subtree, titleData,
 } from "./model";
 import { OutlineItem, parseOutline, toMarkdown } from "./outline";
 import {
@@ -16,7 +16,7 @@ import {
 
 export type Direction = "up" | "down" | "left" | "right";
 
-const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const nextFrame = () => new Promise<void>((r) => window.requestAnimationFrame(() => r()));
 const near = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) < 0.01;
 
 async function waitFor<T>(probe: () => T | null, frames: number): Promise<T | null> {
@@ -111,7 +111,7 @@ export function selectedBadge(view: ExcalidrawView): string | null {
 export function editingTitle(view: ExcalidrawView): boolean {
   const api = view.excalidrawAPI;
   const cid = api?.getAppState().editingTextElement?.containerId;
-  return !!cid && !!titleData(api!.getSceneElements().find((e) => e.id === cid));
+  return !!cid && !!titleData(api.getSceneElements().find((e) => e.id === cid));
 }
 
 /** The mind map node whose text is being edited, if any. */
@@ -119,8 +119,8 @@ export function editingNode(view: ExcalidrawView): El | null {
   const api = view.excalidrawAPI;
   const cid = api?.getAppState().editingTextElement?.containerId;
   if (!cid) return null;
-  const el = api!.getSceneElements().find((e) => e.id === cid);
-  return nodeData(el) ? el! : null;
+  const el = api.getSceneElements().find((e) => e.id === cid);
+  return el && nodeData(el) ? el : null;
 }
 
 function select(view: ExcalidrawView, id: string) {
@@ -191,7 +191,7 @@ interface NewNode {
   roughness: number;
 }
 
-function createNode(tx: SceneTx, ea: any, n: NewNode): string {
+function createNode(tx: SceneTx, ea: ExcalidrawAutomate, n: NewNode): string {
   const st = n.style ?? styleFor(n.depth, n.branch);
   ea.clear();
   Object.assign(ea.style, {
@@ -209,14 +209,14 @@ function createNode(tx: SceneTx, ea: any, n: NewNode): string {
     textAlign: "center",
     verticalAlign: "middle",
   });
-  const id: string = ea.addText(n.at.x, n.at.y, n.text ?? DEFAULT_TEXT[Math.min(n.depth, 2)], {
+  const id = ea.addText(n.at.x, n.at.y, n.text ?? DEFAULT_TEXT[Math.min(n.depth, 2)], {
     box: true,
     boxPadding: st.padX,
     boxStrokeColor: st.borderColor,
     textAlign: "center",
     textVerticalAlign: "middle",
   });
-  for (const el of ea.getElements() as El[]) {
+  for (const el of ea.getElements()) {
     if (el.id === id) el.customData = { ...(el.customData ?? {}), [KEY]: { ...n.data, self: id, root: n.data.root || id } };
     tx.add(el);
   }
@@ -242,7 +242,7 @@ function removeEdge(tx: SceneTx, edge: El) {
   removeBound(tx, edge.endBinding?.elementId, edge.id);
 }
 
-function createEdge(tx: SceneTx, ea: any, rootId: string, n: MMNode, start: Vec, end: Vec) {
+function createEdge(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, n: MMNode, start: Vec, end: Vec) {
   const parent = n.parent!;
   const side = n.side as Side;
   ea.clear();
@@ -254,7 +254,7 @@ function createEdge(tx: SceneTx, ea: any, rootId: string, n: MMNode, start: Vec,
     roundness: null,
     opacity: 100,
   });
-  const id: string = ea.addArrow(
+  const id = ea.addArrow(
     [[start.x, start.y], [end.x, end.y]],
     {
       startArrowHead: null,
@@ -265,7 +265,7 @@ function createEdge(tx: SceneTx, ea: any, rootId: string, n: MMNode, start: Vec,
       endFixedPoint: side === "R" ? [0, 0.5] : [1, 0.5],
     },
   );
-  const el: El = ea.getElement(id);
+  const el = ea.getElement(id);
   el.customData = { [KEY]: { edge: true, root: rootId, parent: parent.id, child: n.id } };
   tx.add(el);
   addBound(tx, parent.id, id);
@@ -273,7 +273,7 @@ function createEdge(tx: SceneTx, ea: any, rootId: string, n: MMNode, start: Vec,
   ea.clear();
 }
 
-function createBrace(tx: SceneTx, ea: any, rootId: string, summary: MMNode, b: Brace) {
+function createBrace(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, summary: MMNode, b: Brace) {
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: summary.el.strokeColor,
@@ -283,15 +283,15 @@ function createBrace(tx: SceneTx, ea: any, rootId: string, summary: MMNode, b: B
     roundness: { type: 2 }, // smooth curve through the points
     opacity: 100,
   });
-  const id: string = ea.addLine(bracePoints(b).map(([x, y]) => [b.x + x, b.y + y]));
-  const el: El = ea.getElement(id);
+  const id = ea.addLine(bracePoints(b).map(([x, y]) => [b.x + x, b.y + y]));
+  const el = ea.getElement(id);
   el.customData = { [KEY]: { brace: true, root: rootId, summary: summary.id } };
   tx.add(el);
   ea.clear();
 }
 
 /** Title tab of a boundary: a container with bound text, not yet added to the scene. */
-function createTitle(ea: any, rootId: string, boundaryId: string, at: Vec, roughness: number, fontFamily: number): El[] {
+function createTitle(ea: ExcalidrawAutomate, rootId: string, boundaryId: string, at: Vec, roughness: number, fontFamily: number): El[] {
   const c = boundaryColors();
   ea.clear();
   Object.assign(ea.style, {
@@ -309,14 +309,14 @@ function createTitle(ea: any, rootId: string, boundaryId: string, at: Vec, rough
     textAlign: "center",
     verticalAlign: "middle",
   });
-  const id: string = ea.addText(at.x, at.y, BOUNDARY_TEXT, {
+  const id = ea.addText(at.x, at.y, BOUNDARY_TEXT, {
     box: true,
     boxPadding: TITLE_PADDING.padX,
     boxStrokeColor: c.titleFill,
     textAlign: "center",
     textVerticalAlign: "middle",
   });
-  const els = ea.getElements() as El[];
+  const els = ea.getElements();
   for (const el of els) if (el.id === id) el.customData = { [KEY]: { boundaryTitle: true, self: id, root: rootId, boundary: boundaryId } };
   // Container before its text.
   els.sort((a, b) => (a.type === "text" ? 1 : 0) - (b.type === "text" ? 1 : 0));
@@ -325,7 +325,7 @@ function createTitle(ea: any, rootId: string, boundaryId: string, at: Vec, rough
 }
 
 /** Boundary frame with its title, not yet added to the scene. */
-function createBoundary(ea: any, rootId: string, parent: MMNode, covers: MMNode[]): El[] {
+function createBoundary(ea: ExcalidrawAutomate, rootId: string, parent: MMNode, covers: MMNode[]): El[] {
   const c = boundaryColors();
   const first = covers[0];
   ea.clear();
@@ -340,8 +340,8 @@ function createBoundary(ea: any, rootId: string, parent: MMNode, covers: MMNode[
     opacity: 100,
     angle: 0,
   });
-  const id: string = ea.addRect(first.el.x, first.el.y, first.el.width, first.el.height);
-  const frame: El = ea.getElement(id);
+  const id = ea.addRect(first.el.x, first.el.y, first.el.width, first.el.height);
+  const frame = ea.getElement(id);
   frame.customData = { [KEY]: { boundary: true, self: id, root: rootId, parent: parent.id, topics: covers.map((n) => n.id) } };
   ea.clear();
   const font = first.text?.fontFamily ?? 1;
@@ -349,7 +349,7 @@ function createBoundary(ea: any, rootId: string, parent: MMNode, covers: MMNode[
 }
 
 /** Fold badge of a topic: a circle with the count of hidden topics, added to the scene. */
-function createBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, count: string): [El, El] {
+function createBadge(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, n: MMNode, count: string): [El, El] {
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: "#ffffff",
@@ -366,14 +366,14 @@ function createBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, count: str
     textAlign: "center",
     verticalAlign: "middle",
   });
-  const id: string = ea.addText(n.el.x + n.el.width, n.el.y, count, {
+  const id = ea.addText(n.el.x + n.el.width, n.el.y, count, {
     box: "ellipse",
     boxPadding: BADGE_PADDING.padX,
     boxStrokeColor: n.el.strokeColor,
     textAlign: "center",
     textVerticalAlign: "middle",
   });
-  const els = ea.getElements() as El[];
+  const els = ea.getElements();
   for (const el of els) if (el.id === id) el.customData = { [KEY]: { badge: true, self: id, root: rootId, node: n.id } };
   els.sort((a, b) => (a.type === "text" ? 1 : 0) - (b.type === "text" ? 1 : 0));
   els.forEach((el) => tx.add(el));
@@ -388,13 +388,13 @@ function createBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, count: str
 function setHidden(tx: SceneTx, id: string, hidden: boolean) {
   const el = tx.get(id);
   if (!el) return;
-  const saved = el.customData?.[HIDDEN_KEY];
+  const saved = hiddenState(el);
   if (hidden) {
     if (saved && el.opacity === 0 && el.locked && !el.link && !el.hasTextLink) return;
-    const keep = saved ?? { opacity: el.opacity ?? 100, locked: !!el.locked, link: el.link ?? null, hasTextLink: !!el.hasTextLink };
+    const keep: HiddenState = saved ?? { opacity: el.opacity ?? 100, locked: !!el.locked, link: el.link ?? null, hasTextLink: !!el.hasTextLink };
     tx.patch(id, { opacity: 0, locked: true, link: null, hasTextLink: false, customData: { ...el.customData, [HIDDEN_KEY]: keep } });
   } else if (saved) {
-    const { [HIDDEN_KEY]: _, ...rest } = el.customData!;
+    const { [HIDDEN_KEY]: _, ...rest } = el.customData ?? {};
     const link = saved.link === undefined ? {} : { link: saved.link, hasTextLink: !!saved.hasTextLink };
     tx.patch(id, { opacity: saved.opacity, locked: saved.locked, ...link, customData: rest });
   }
@@ -418,13 +418,13 @@ interface NodeSize { w: number; h: number; tw: number; th: number; }
 
 const padOf = (n: MMNode) => (n.data.summary ? SUMMARY_PADDING : paddingFor(n.depth));
 
-function measureBox(ea: any, text: El | null, pad: { padX: number; padY: number }): NodeSize {
+function measureBox(ea: ExcalidrawAutomate, text: El | null, pad: { padX: number; padY: number }): NodeSize {
   let tw = MIN_TEXT_WIDTH;
   let th = 20;
   if (text) {
     ea.style.fontFamily = text.fontFamily;
     ea.style.fontSize = text.fontSize;
-    const raw: string = text.originalText ?? text.text ?? "";
+    const raw = text.originalText ?? text.text ?? "";
     const m = ea.measureText(raw.length ? raw : " ");
     tw = Math.max(MIN_TEXT_WIDTH, Math.ceil(m.width));
     th = Math.ceil(m.height);
@@ -460,7 +460,7 @@ const sameData = (a: NodeData, b: NodeData) =>
   near(a.lx, b.lx!) && near(a.ly, b.ly!) && near(a.ox ?? 0, b.ox!) && near(a.oy ?? 0, b.oy!);
 
 /** Sizes nodes to their text, positions the whole map and repairs connectors, all inside the transaction. */
-function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
+function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap | null {
   const map = buildMap(tx.live(), rootId);
   if (!map) return null;
 
@@ -516,7 +516,7 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
     }
     const dx = end.x - start.x;
     const dy = end.y - start.y;
-    const pts = edge.points as number[][] | undefined;
+    const pts = edge.points;
     const same = near(edge.x, start.x) && near(edge.y, start.y) && pts?.length === 2 && near(pts[1][0], dx) && near(pts[1][1], dy);
     if (!same)
       tx.patch(edge.id, { x: start.x, y: start.y, points: [[0, 0], [dx, dy]], width: Math.abs(dx), height: Math.abs(dy) });
@@ -530,7 +530,7 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
       continue;
     }
     const pts = bracePoints(b);
-    const cur = brace.points as number[][] | undefined;
+    const cur = brace.points;
     const same = near(brace.x, b.x) && near(brace.y, b.y) && cur?.length === pts.length &&
       pts.every((p, i) => near(cur[i][0], p[0]) && near(cur[i][1], p[1]));
     if (!same) tx.patch(brace.id, { x: b.x, y: b.y, points: pts, width: b.w, height: b.h });
@@ -588,7 +588,7 @@ function labelOf(tx: SceneTx, el: El): El | null {
   const tid = boundTextId(el);
   const t = tid ? tx.get(tid) : undefined;
   if (!t || t.isDeleted) return null;
-  if (!t.customData?.[KEY]?.relationLabel)
+  if (!isRelationLabel(t))
     tx.patch(t.id, { strokeColor: relationshipColors().text, customData: { ...t.customData, [KEY]: { relationLabel: true } } });
   return tx.get(t.id)!;
 }
@@ -601,7 +601,7 @@ function labelOf(tx: SceneTx, el: El): El | null {
 function routeRelation(tx: SceneTx, el: El, label: El | null, a: El, b: El) {
   const { start, mid, end } = relationPoints(boxOf(a), boxOf(b), relationData(el)?.bend ?? RELATION_BEND);
   const pts = [[0, 0], [mid.x - start.x, mid.y - start.y], [end.x - start.x, end.y - start.y]];
-  const cur = el.points as number[][] | undefined;
+  const cur = el.points;
   const same = near(el.x, start.x) && near(el.y, start.y) && cur?.length === 3 &&
     pts.every((p, i) => near(cur[i][0], p[0]) && near(cur[i][1], p[1]));
   if (!same) {
@@ -664,13 +664,13 @@ export async function addRelationship(view: ExcalidrawView, fromId: string, toId
       roundness: { type: 2 }, // smooth curve through the points
       opacity: 100,
     });
-    const id: string = ea.addArrow([[start.x, start.y], [mid.x, mid.y], [end.x, end.y]], {
+    const id = ea.addArrow([[start.x, start.y], [mid.x, mid.y], [end.x, end.y]], {
       startArrowHead: null,
       endArrowHead: "arrow",
       startObjectId: fromId,
       endObjectId: toId,
     });
-    const el: El = ea.getElement(id);
+    const el = ea.getElement(id);
     el.customData = { [KEY]: { relation: true, self: id, from: fromId, to: toId, bend: RELATION_BEND } };
     tx.add(el);
     addBound(tx, fromId, id);
@@ -684,7 +684,7 @@ export async function addRelationship(view: ExcalidrawView, fromId: string, toId
 }
 
 /** Puts the badge with the count of hidden topics just outside the folded topic, creating or updating it. */
-function placeBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, box: Box, badge: MMBadge | undefined) {
+function placeBadge(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, n: MMNode, box: Box, badge: MMBadge | undefined) {
   const count = String(subtree(n).length - 1);
   let el = badge?.el;
   let text = badge?.text ?? null;
@@ -704,7 +704,7 @@ function placeBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, box: Box, b
 }
 
 /** Runs a mind map mutation in one transaction and one undo step. */
-function run<T>(view: ExcalidrawView, fn: (tx: SceneTx, ea: any) => T): T | null {
+function run<T>(view: ExcalidrawView, fn: (tx: SceneTx, ea: ExcalidrawAutomate) => T): T | null {
   if (!view.excalidrawAPI) return null;
   const ea = getEA(view);
   if (!ea) {
@@ -735,7 +735,7 @@ const branchOf = (n: MMNode): Branch => ({ stroke: n.el.strokeColor, fill: n.el.
 
 /** Scene-space bounding box of an element; lines and arrows span their points rather than x/y/width/height. */
 function boundsOf(el: El): Box {
-  const pts = el.points as number[][] | undefined;
+  const pts = el.points;
   if (!pts?.length) return { x: el.x, y: el.y, w: el.width, h: el.height };
   const xs = pts.map((p) => el.x + p[0]);
   const ys = pts.map((p) => el.y + p[1]);
@@ -754,7 +754,7 @@ export async function newMap(view: ExcalidrawView) {
 }
 
 /** Adds a new map at a free spot in view, its central topic with the text and subtopics given; returns the central topic. */
-function createMap(tx: SceneTx, ea: any, text?: string, items: OutlineItem[] = []): string {
+function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: OutlineItem[] = []): string {
   const st = tx.api.getAppState();
   const z = st.zoom?.value ?? 1;
   const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
@@ -891,10 +891,10 @@ export async function deleteNodes(view: ExcalidrawView, nodeIds: string[], allow
 }
 
 /** Deletes the node with its subtopics in the transaction; returns the topic to select next. */
-function removeTopic(tx: SceneTx, ea: any, map: MindMap, node: MMNode, allowRoot: boolean): string | null {
+function removeTopic(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMNode, allowRoot: boolean): string | null {
   if (!node.parent) {
     if (!allowRoot) {
-      new Notice("Deleting the central topic is disabled. Enable it in the Excalidraw Mind Map settings.");
+      new Notice("Deleting the central topic is disabled. Enable it in the plugin settings.");
       return null;
     }
     deleteSubtree(tx, map, node);
@@ -1136,7 +1136,7 @@ export function foldState(view: ExcalidrawView, nodeId: string): { foldable: boo
 }
 
 /** Folds or unfolds every topic with subtopics in the node's subtree, the node included. */
-function foldSubtree(tx: SceneTx, ea: any, map: MindMap, node: MMNode, folded: boolean) {
+function foldSubtree(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMNode, folded: boolean) {
   for (const n of subtree(node)) setFolded(tx, n, folded && canFold(n));
   layoutMap(tx, ea, map.root.id);
 }
@@ -1287,7 +1287,7 @@ export function outlineMarkdown(view: ExcalidrawView, nodeIds: string[]): string
 }
 
 /** Adds the outline items, with everything under them, as subtopics of the node; returns the new subtopics. */
-function addOutline(tx: SceneTx, ea: any, map: MindMap, node: MMNode, items: OutlineItem[]): string[] {
+function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMNode, items: OutlineItem[]): string[] {
   const fontFamily = node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily;
   const at = { x: node.el.x + node.el.width + 40, y: node.el.y };
   // Like addChild: main topics alternate sides and take the next branch color, others the color of their branch.
@@ -1383,7 +1383,7 @@ function dropOffsets(tx: SceneTx, nodes: MMNode[]) {
 /** Patches only the properties that differ, so unchanged elements stay untouched. */
 function patchChanged(tx: SceneTx, el: El | null | undefined, p: Partial<El>) {
   if (!el) return;
-  const changed = Object.entries(p).filter(([k, v]) => JSON.stringify(el[k]) !== JSON.stringify(v));
+  const changed = Object.entries(p).filter(([k, v]) => JSON.stringify(el[k as keyof El]) !== JSON.stringify(v));
   if (changed.length) tx.patch(el.id, Object.fromEntries(changed));
 }
 

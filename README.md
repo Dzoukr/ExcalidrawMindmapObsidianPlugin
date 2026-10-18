@@ -1,6 +1,8 @@
 # Excalidraw Mind Map
 
-Obsidian plugin that adds XMind-style mind map editing to Excalidraw drawings. Requires the Excalidraw plugin (tested with 2.29.0).
+Obsidian plugin that adds XMind-style mind map editing to Excalidraw drawings. Requires the Excalidraw plugin.
+
+![](docs/mindmap.png)
 
 ## Usage
 
@@ -20,41 +22,68 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | Alt+Left / Alt+Right | Promote or demote the topic (toward or away from the central topic, mirrored on the left side) |
 | Ctrl+/ (Cmd+/ on Mac) | Collapse or expand the topic |
 
-**Add summary** in the panel (or the command "Add summary to selected topics") works like XMind's Summary: select one or more sibling topics and it adds a summary topic behind a brace spanning them, and any topics between them. A summary can have its own subtopics. A sibling added to a summarized topic (Enter / Shift+Enter) joins the summary, while a topic added to the parent (Tab / Insert) stays outside it. Deleting all the topics it spans deletes the summary too.
+## Key Features
 
-**Add boundary** (or the command "Add boundary around selected topics") draws a dashed frame with a title tab around the selected sibling topics, any topics between them, and their subtopics, like XMind's Boundary. The title is edited right away. Select the frame or its title to edit the title (Space / F2) or delete the boundary (Delete), which keeps the topics. Siblings added with Enter join the boundary, and boundaries can be nested.
+### ⌨️ Keyboard-first editing
 
-**Links.** Typing `[[` while editing a topic opens Excalidraw's link suggester for notes, headings, blocks and tags; Enter or Tab picks the link instead of committing the topic. The Excalidraw plugin turns the link into the topic's link, so Ctrl+click (or the link icon) opens the note. Links are kept when topics are copied as Markdown, and pasted outlines keep theirs.
+Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, delete branches, move between topics and reorder them. While editing, Enter commits the text and Tab commits it and adds a child.
 
-**Markdown outlines.** Copying selected topics (Ctrl+C, or the command "Copy selected topics as Markdown") puts their branches on the clipboard as a bullet list indented with tabs, collapsed subtopics included, ready to paste into a note. Cut does the same and deletes the topics. Summaries and boundaries are not part of the outline. Pasting (Ctrl+V) with a topic selected adds the clipboard's text as its subtopics: bullet and numbered lists nest by indentation, headings nest by level with the lists below them, a line indented under a list item continues that topic on a new line, and every other line becomes a topic of its own. With nothing selected, Ctrl+V is Excalidraw's own paste; the command "Insert new mind map from Markdown outline in the clipboard" builds a new map instead, with a single top item as the central topic. Copied Excalidraw elements and images always paste as usual. The panel has Copy and Paste buttons too, for phones and tablets; Paste with no topic selected builds a new map.
+### 📐 Automatic layout
 
-**Promote** (Alt+arrow toward the central topic, a panel button, or a command) makes the topic, with its subtopics, a sibling of its parent, placed right after it; a main topic can't be promoted. **Demote** (Alt+arrow away from the central topic) makes it the last subtopic of the sibling above, expanding that sibling if it's collapsed. A summary or boundary spanning only the moved topic is removed. A topic that becomes a main topic gets the next branch color and the main topic look, and one that stops being a main topic gets the subtopic look and the color of its new branch; its subtopics take the new color too. Other moves keep the styling.
+The two-sided map re-arranges itself after every change. Drag a topic anywhere: it keeps its new place and its subtopics follow. The layout menu in the panel refreshes the layout, resets it to the automatic positions, or resets the whole map with **Reset all**.
 
-**Collapse** (Ctrl+/, the fold button in the panel, or the command "Collapse or expand selected topic") works as a toggle, like XMind's Collapse/Expand. On a topic it collapses the topic together with everything below it, hiding its subtopics, summaries and boundaries; the same key or button expands it all again. On the central topic, which can't be collapsed itself, it collapses or expands all main topics. A badge next to a collapsed topic shows how many topics are hidden, and clicking it expands the topic. Adding a subtopic to a collapsed topic expands it as well.
+### 🧩 Summaries, boundaries and relationships
 
-**Add relationship** (the panel button or the command "Add relationship between the two selected topics") draws a dashed, curved arrow from the first selected topic to the second, like XMind's Relationship; the topics may belong to different maps. It stays attached to both topics, whether the layout moves them or you drag them, keeping the curve you give it by selecting it and dragging its middle point (Reset all brings back the default curve). Double-click it to add a label, and delete it like any element. It hides while either topic is collapsed away and goes when either topic is deleted.
+Select sibling topics to add a **summary**, a topic behind a brace that spans them. Or add a **boundary**, a dashed frame with a title around them. A **relationship** is a curved, labeled arrow between any two topics, even in different maps, and it stays attached when the topics move.
 
-The last button in the panel (or the command "Pause or resume mind map editing") pauses the plugin: its keys are left to Excalidraw, text edits no longer re-run the layout, and the other buttons are disabled until you resume. A restart resumes it too.
+### 🪗 Collapse and expand
 
-While editing text: Enter commits, Shift+Enter adds a line break, Tab/Insert commits and adds a child.
+Ctrl+/ collapses a topic with everything below it. A badge shows how many topics are hidden, and clicking it expands the topic again. On the central topic, it collapses or expands all main topics at once.
 
-Layout runs automatically after every change. Nodes can be dragged freely. The offset is remembered, and the node's subtree follows it. The layout button in the panel offers three modes. **Refresh layout** re-runs the layout and keeps those moves, which is useful after editing with plain Excalidraw tools (dragging a branch, changing a font size, deleting a connector). **Reset layout** discards the moves and puts topics back to their automatic positions, for the selected subtree or for all maps when nothing is selected. **Reset all** (also a command) goes further and resets the whole map of the selected topic, or every map when nothing is selected, as if every topic had just been created: it discards the moves and restyles topics, summaries, connectors, braces and boundaries from the current settings, with the main topics taking the branch colors in turn. Texts, fonts and collapsed topics stay as they are. Like every operation, it is one undo step.
+### ↔️ Promote and demote
 
-Every operation is a single undo step.
+Alt+arrow moves a topic, with its subtopics, one level up or down. A topic that becomes a main topic takes the next branch color, and one that moves under another branch takes that branch's color.
 
-Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), boundaries (line, background, title text, title background), relationships (line and arrowhead, label text), and the branch colors that main topics take in turn. Changes apply to topics created afterwards, and to existing maps with **Reset all**. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards, or on all of them with Reset all.
+### 📝 Markdown outlines
 
-## Data model
+Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into a note. Ctrl+V pastes bullet lists, numbered lists or headings back as subtopics of the selected topic. A command builds a whole new map from the outline in the clipboard.
 
-- Node: rectangle with bound text, `customData.mindmap = { self, root, parent, order, side, folded, ox, oy, lx, ly }`.
-- Summary: a node whose `parent` is the parent of the topics it spans, with `summary` listing their ids. The range runs from the first to the last still present.
-- Connector: arrow bound to both nodes, `customData.mindmap = { edge, root, parent, child }`.
-- Brace: line next to the summarized topics, `customData.mindmap = { brace, root, summary }`.
-- Boundary: dashed rectangle behind the map, `customData.mindmap = { boundary, self, root, parent, topics }`, and its title, a rectangle with bound text, `customData.mindmap = { boundaryTitle, self, root, boundary }`.
-- Relationship: curved arrow bound to both topics, `customData.mindmap = { relation, self, from, to, bend }`, with an optional bound label.
-- Fold badge: ellipse with bound text next to a collapsed topic, `customData.mindmap = { badge, self, root, node }`.
-- Hidden elements (everything under a collapsed topic) get opacity 0 and are locked; their own opacity and lock are kept in `customData.mindmapHidden` and restored when shown again.
-- Copies of nodes (paste, Alt-drag) are ignored by the mind map, because `self` no longer matches the element id.
+### 🔗 Links to notes
+
+Type `[[` in a topic to open Excalidraw's link suggester for notes, headings, blocks and tags. Ctrl+click the topic to open the note. Links are kept when topics are copied as Markdown and pasted back.
+
+### 🎨 Your colors
+
+Pick the colors of the central topic, branches, summaries, boundaries and relationships in the settings. **Reset all** restyles existing maps with them.
+
+### 📱 Works on mobile
+
+A floating panel at the bottom of the drawing offers every action. On phones and tablets you can build maps without a keyboard.
+
+### ✏️ Still plain Excalidraw
+
+Maps are ordinary Excalidraw elements, so every Excalidraw tool still works on them. Every operation is a single undo step. Pause the plugin from the panel when you want Excalidraw's own shortcuts back.
+
+## Configuration
+
+All options are in **Settings → Excalidraw Mind Map**.
+
+| Setting | Default | Description |
+|---|---|---|
+| Show control panel on desktop | On | Shows the floating panel on desktop. On phones and tablets it is always shown. |
+| Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. |
+| Arrows instead of lines | Off | Connectors end in an arrowhead pointing to the subtopic. |
+
+**Colors** can be set for:
+
+- the central topic: text, border and background
+- the topic text of main topics and subtopics
+- summaries: text, border and brace, background
+- boundaries: dashed line, background, title text, title background
+- relationships: line and arrowhead, label text
+- branches: line and border, and main topic background. Main topics take the branch colors in turn. Branch colors can be added or removed, and **Reset colors to defaults** restores the original palette.
+
+Color and arrow changes apply to topics and connectors created afterwards. To apply them to an existing map, use **Reset all** from the panel's layout menu or the command palette.
 
 ## Development
 
@@ -63,6 +92,11 @@ npm install
 npm run dev     # watch build, copies into test-vault/.obsidian/plugins/excalidraw-mindmap
 npm run build   # type-check + production build
 npm test        # layout unit tests
+npm run lint    # ESLint with Obsidian's plugin rules
 ```
 
-To install into a vault, copy `main.js`, `manifest.json` and `styles.css` into `<vault>/.obsidian/plugins/excalidraw-mindmap/`.
+To install into a vault manually, copy `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/Dzoukr/ExcalidrawMindmapObsidianPlugin/releases/latest) into `<vault>/.obsidian/plugins/excalidraw-mindmap/`.
+
+## License
+
+[MIT](LICENSE)

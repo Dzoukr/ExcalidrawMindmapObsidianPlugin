@@ -2,24 +2,24 @@ import { Menu, setIcon } from "obsidian";
 import { Direction } from "./actions";
 
 export interface PanelActions {
-  newMap(): void;
-  addChild(): void;
-  addSibling(): void;
-  addSummary(): void;
-  addBoundary(): void;
-  addRelationship(): void;
-  edit(): void;
-  remove(): void;
-  nav(dir: Direction): void;
-  toggleFold(): void;
-  copy(): void;
-  paste(): void;
-  promote(): void;
-  demote(): void;
-  relayout(): void;
-  reset(): void;
-  resetAll(): void;
-  togglePause(): void;
+  newMap: () => void;
+  addChild: () => void;
+  addSibling: () => void;
+  addSummary: () => void;
+  addBoundary: () => void;
+  addRelationship: () => void;
+  edit: () => void;
+  remove: () => void;
+  nav: (dir: Direction) => void;
+  toggleFold: () => void;
+  copy: () => void;
+  paste: () => void;
+  promote: () => void;
+  demote: () => void;
+  relayout: () => void;
+  reset: () => void;
+  resetAll: () => void;
+  togglePause: () => void;
 }
 
 export interface PanelState {

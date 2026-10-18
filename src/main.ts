@@ -5,7 +5,7 @@ import {
   newMapFromOutline, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
   selectedNode, selectedNodes, selectedTopics, toggleFold, topicState, unfold,
 } from "./actions";
-import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
+import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { nodeData, titleData } from "./model";
 import { isOutline } from "./outline";
 import { FloatingPanel, PanelActions } from "./panel";
@@ -64,7 +64,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private paused = false;
 
   async onload() {
-    this.settings = mergeSettings(await this.loadData());
+    this.settings = mergeSettings((await this.loadData()) as Partial<Settings> | null);
     setColors(this.settings.colors);
     setArrows(this.settings.arrows);
     this.addSettingTab(new MindMapSettingTab(this.app, this));
@@ -72,7 +72,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.keyScope = new Scope(this.app.scope);
     this.keyScope.register([], "F2", () => {
       const view = this.activeView();
-      if (view) this.edit(view);
+      if (view) void this.edit(view);
       return false;
     });
 
@@ -259,11 +259,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
   private detach(s: ViewState) {
     s.unsubscribe?.();
-    if (s.raf) cancelAnimationFrame(s.raf);
+    if (s.raf) window.cancelAnimationFrame(s.raf);
     s.panel.destroy();
   }
 
-  private onSceneChange(s: ViewState, appState: any) {
+  private onSceneChange(s: ViewState, appState: AppState) {
     const editing: El | null = appState.editingTextElement ?? null;
     if (s.editing && !editing) {
       const containerId = s.editing.containerId;
@@ -273,7 +273,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       s.editing = editing;
     }
     if (!s.raf) {
-      s.raf = requestAnimationFrame(() => {
+      s.raf = window.requestAnimationFrame(() => {
         s.raf = 0;
         this.checkBadge(s);
         if (!this.paused && !s.api.getAppState().editingTextElement) followRelations(s.view);
@@ -285,7 +285,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   /** Clicking a fold badge selects it: expand its topic, like XMind's expand button. */
   private checkBadge(s: ViewState) {
     const node = this.paused || s.api.getAppState().viewModeEnabled ? null : selectedBadge(s.view);
-    if (node && node !== s.badge) unfold(s.view, node);
+    if (node && node !== s.badge) void unfold(s.view, node);
     s.badge = node;
   }
 
@@ -344,20 +344,20 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   /** Adds a summary spanning the selected topics, or the topic being edited. */
   private summarize(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => addSummary(view, [id]));
-    addSummary(view, selectedNodes(view).map((n) => n.id));
+    void addSummary(view, selectedNodes(view).map((n) => n.id));
   }
 
   /** Puts a boundary around the selected topics, or the topic being edited. */
   private bound(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => addBoundary(view, [id]));
-    addBoundary(view, selectedNodes(view).map((n) => n.id));
+    void addBoundary(view, selectedNodes(view).map((n) => n.id));
   }
 
   /** Connects the two selected topics with a relationship, from the first selected to the second. */
   private relate(view: ExcalidrawView) {
     const nodes = selectedNodes(view);
     if (nodes.length !== 2) return void new Notice("Select two topics to connect.");
-    addRelationship(view, nodes[0].id, nodes[1].id);
+    void addRelationship(view, nodes[0].id, nodes[1].id);
   }
 
   /** Edits the selected node's text, or the selected boundary's title. */
@@ -397,7 +397,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   /** Panel paste: under the selected topic (or the one being edited), as a new map when no topic is selected. */
   private paste(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => this.pasteFromClipboard(view, id));
-    this.pasteFromClipboard(view, selectedNode(view)?.id ?? null);
+    void this.pasteFromClipboard(view, selectedNode(view)?.id ?? null);
   }
 
   private async pasteFromClipboard(view: ExcalidrawView, nodeId: string | null) {
@@ -422,7 +422,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (!view) return;
     const target = e.target as HTMLElement;
     if (!view.containerEl.contains(target) && target !== target.ownerDocument?.body) return;
-    if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
     const appState = view.excalidrawAPI!.getAppState();
     if (appState.viewModeEnabled || appState.editingTextElement) return;
 
@@ -432,7 +432,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       if (!node || e.clipboardData.files.length || !isOutline(text)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      pasteOutline(view, node.id, text);
+      void pasteOutline(view, node.id, text);
       return;
     }
     const ids = selectedTopics(view).map((n) => n.id);
@@ -441,25 +441,25 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     e.preventDefault();
     e.stopImmediatePropagation();
     e.clipboardData.setData("text/plain", md);
-    if (e.type === "cut") deleteNodes(view, ids, this.settings.allowDeleteCentralTopic);
+    if (e.type === "cut") void deleteNodes(view, ids, this.settings.allowDeleteCentralTopic);
     else new Notice("Topics copied as Markdown.");
   };
 
   private panelActions(view: ExcalidrawView): PanelActions {
     const on = (action: (id: string) => unknown) => () => this.runOnNode(view, action);
     return {
-      newMap: () => newMap(view),
+      newMap: () => void newMap(view),
       addChild: on((id) => addChild(view, id)),
       addSibling: on((id) => addSibling(view, id, false)),
       addSummary: () => this.summarize(view),
       addBoundary: () => this.bound(view),
       addRelationship: () => this.relate(view),
-      edit: () => this.edit(view),
-      remove: () => this.remove(view),
+      edit: () => void this.edit(view),
+      remove: () => void this.remove(view),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
-      copy: () => this.copyCommand(view),
-      paste: () => this.paste(view),
+      copy: () => void this.copyCommand(view),
+      paste: () => void this.paste(view),
       promote: () => this.runOnNode(view, (id) => promote(view, id)),
       demote: () => this.runOnNode(view, (id) => demote(view, id)),
       relayout: () => relayout(view, selectedNode(view)?.id),
@@ -492,15 +492,15 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
     if (fold) {
       if (appState.editingTextElement || !selectedNode(view)) return;
-      if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
       action = (id) => toggleFold(view, id);
     } else if (reorder) {
       if (appState.editingTextElement || !selectedNode(view)) return;
-      if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
       action = (id) => moveNode(view, id, e.key === "ArrowUp");
     } else if (level) {
       if (appState.editingTextElement || !selectedNode(view)) return;
-      if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
       action = (id) => changeLevel(view, id, e.key === "ArrowRight" ? "right" : "left");
     } else if (appState.editingTextElement) {
       // Excalidraw's [[link]] suggester is open: its Enter and Tab pick a link.
@@ -520,12 +520,12 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       else if ((e.key === "Tab" && !e.shiftKey) || e.key === "Insert") action = (id) => addChild(view, id);
       if (!action) return;
     } else {
-      if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
       const boundary = selectedBoundary(view);
       if (boundary) {
         // A selected boundary: Delete removes it, Space or Enter edits its title.
-        if (e.key === "Delete" || e.key === "Backspace") deleteBoundary(view, boundary);
-        else if ((e.key === " " || e.key === "Enter") && !e.repeat) editBoundaryTitle(view, boundary);
+        if (e.key === "Delete" || e.key === "Backspace") void deleteBoundary(view, boundary);
+        else if ((e.key === " " || e.key === "Enter") && !e.repeat) void editBoundaryTitle(view, boundary);
         else return;
         e.preventDefault();
         e.stopPropagation();
@@ -539,7 +539,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        deleteNodes(view, topics.map((n) => n.id), this.settings.allowDeleteCentralTopic);
+        void deleteNodes(view, topics.map((n) => n.id), this.settings.allowDeleteCentralTopic);
         return;
       }
       switch (e.key) {
@@ -599,7 +599,7 @@ class MindMapSettingTab extends PluginSettingTab {
       );
     new Setting(this.containerEl)
       .setName("Arrows instead of lines")
-      .setDesc("Connectors point to the subtopic with an arrowhead. Used for connectors created from now on, and by Reset all.")
+      .setDesc("Connectors point to the subtopic with an arrowhead. Used for connectors created from now on, and when you reset all.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.arrows).onChange(async (v) => {
           this.plugin.settings.arrows = v;
@@ -624,7 +624,7 @@ class MindMapSettingTab extends PluginSettingTab {
 
     new Setting(el)
       .setName("Colors")
-      .setDesc("Used for topics created from now on. Existing topics keep their colors until Reset all in the panel's layout menu.")
+      .setDesc("Used for topics created from now on. Existing topics keep their colors until you reset all from the panel's layout menu.")
       .setHeading();
 
     const central = new Setting(el).setName("Central topic").setDesc("Text, border and background.");
