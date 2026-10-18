@@ -17,6 +17,7 @@ export interface PanelActions {
   demote(): void;
   relayout(): void;
   reset(): void;
+  resetAll(): void;
   togglePause(): void;
 }
 
@@ -83,6 +84,7 @@ export class FloatingPanel {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("Reset sizes only").setIcon("refresh-cw").onClick(a.relayout));
       menu.addItem((i) => i.setTitle("Reset full layout").setIcon("rotate-ccw").onClick(a.reset));
+      menu.addItem((i) => i.setTitle("Reset all").setIcon("eraser").onClick(a.resetAll));
       const r = b.getBoundingClientRect();
       menu.showAtPosition({ x: r.left, y: r.top }, b.doc);
     });

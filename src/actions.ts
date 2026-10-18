@@ -1235,10 +1235,73 @@ export function resetLayout(view: ExcalidrawView, nodeId?: string) {
         targets.push(...map.nodes.values());
       }
     }
-    for (const n of targets) {
-      const { ox, oy, lx, ly, ...rest } = n.data;
-      tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: rest } });
-    }
+    dropOffsets(tx, targets);
     for (const r of roots) layoutMap(tx, ea, r);
   });
+}
+
+function dropOffsets(tx: SceneTx, nodes: MMNode[]) {
+  for (const n of nodes) {
+    const { ox, oy, lx, ly, ...rest } = n.data;
+    if ([ox, oy, lx, ly].some((v) => v !== undefined)) tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: rest } });
+  }
+}
+
+/** Patches only the properties that differ, so unchanged elements stay untouched. */
+function patchChanged(tx: SceneTx, el: El | null | undefined, p: Partial<El>) {
+  if (!el) return;
+  const changed = Object.entries(p).filter(([k, v]) => JSON.stringify(el[k]) !== JSON.stringify(v));
+  if (changed.length) tx.patch(el.id, Object.fromEntries(changed));
+}
+
+function applyNodeStyle(tx: SceneTx, n: MMNode, st: NodeStyle) {
+  patchChanged(tx, n.el, {
+    strokeColor: st.borderColor, backgroundColor: st.backgroundColor, fillStyle: "solid", strokeWidth: st.strokeWidth, strokeStyle: "solid",
+  });
+  patchChanged(tx, n.text, { strokeColor: st.textColor, fontSize: st.fontSize });
+}
+
+/**
+ * Restyles the whole map from the current settings, as if every topic had just been created:
+ * colors, font sizes and lines of topics, summaries, connectors, braces and boundaries,
+ * main topics taking the branch colors in turn. Manual moves are dropped too. Texts, fonts
+ * and collapsed topics stay. Applies to the map of the given node, or every map in the drawing.
+ */
+export function resetAll(view: ExcalidrawView, nodeId?: string) {
+  run(view, (tx, ea) => {
+    const r = nodeId ? rootIdOf(tx.get(nodeId)) : null;
+    for (const root of r ? [r] : rootsIn(tx.live())) {
+      const map = buildMap(tx.live(), root);
+      if (map) restyleMap(tx, map);
+      if (map) dropOffsets(tx, [...map.nodes.values()]);
+      layoutMap(tx, ea, root);
+    }
+  });
+}
+
+function restyleMap(tx: SceneTx, map: MindMap) {
+  const branches = new Map<string, Branch>(); // topic id -> its branch
+  map.root.children.forEach((c, i) => branches.set(c.id, branchColor(i)));
+  const visit = (n: MMNode, branch: Branch) => {
+    applyNodeStyle(tx, n, n.depth === 0 ? styleFor(0, branch) : n.covers ? summaryStyle() : styleFor(n.depth, branch));
+    for (const c of n.children) visit(c, branches.get(c.id) ?? branch);
+    // A summary's subtopics take the branch of the topics it spans.
+    for (const s of n.summaries) visit(s.node, branches.get(s.covers[0]) ?? branch);
+  };
+  visit(map.root, branchColor(0));
+
+  for (const n of map.nodes.values()) {
+    const edge = map.edges.get(n.id);
+    const color = tx.get(n.id)!.strokeColor;
+    patchChanged(tx, edge, {
+      strokeColor: color, strokeWidth: n.depth === 1 ? 2 : 1.5, strokeStyle: "solid", startArrowhead: null, endArrowhead: connectorArrowhead(),
+    });
+    patchChanged(tx, map.braces.get(n.id), { strokeColor: color, strokeWidth: 2, strokeStyle: "solid" });
+  }
+  const c = boundaryColors();
+  for (const b of map.boundaries.values()) {
+    patchChanged(tx, b.el, { strokeColor: c.line, backgroundColor: c.fill, fillStyle: "solid", strokeWidth: 2, strokeStyle: "dashed" });
+    patchChanged(tx, b.title, { strokeColor: c.titleFill, backgroundColor: c.titleFill, fillStyle: "solid", strokeWidth: 1, strokeStyle: "solid" });
+    patchChanged(tx, b.titleText, { strokeColor: c.title, fontSize: TITLE_FONT_SIZE });
+  }
 }

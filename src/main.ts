@@ -2,7 +2,7 @@ import { App, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setti
 import {
   Direction, addBoundary, addChild, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
   deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap,
-  newMapFromOutline, outlineMarkdown, pasteOutline, promote, relayout, resetLayout, selectedBadge, selectedBoundary,
+  newMapFromOutline, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
   selectedNode, selectedNodes, selectedTopics, toggleFold, topicState, unfold,
 } from "./actions";
 import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
@@ -151,6 +151,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "reset-layout",
       name: "Reset mind map layout (discard moved topics)",
       checkCallback: (checking) => this.withActiveView(checking, (v) => resetLayout(v, selectedNode(v)?.id)),
+    });
+    this.addCommand({
+      id: "reset-all",
+      name: "Reset all: layout, colors and styles of the mind map from the settings",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => resetAll(v, selectedNode(v)?.id)),
     });
   }
 
@@ -440,6 +445,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       demote: () => this.runOnNode(view, (id) => demote(view, id)),
       relayout: () => relayout(view, selectedNode(view)?.id),
       reset: () => resetLayout(view, selectedNode(view)?.id),
+      resetAll: () => resetAll(view, selectedNode(view)?.id),
       togglePause: () => this.togglePause(),
     };
   }
@@ -574,7 +580,7 @@ class MindMapSettingTab extends PluginSettingTab {
       );
     new Setting(this.containerEl)
       .setName("Arrows instead of lines")
-      .setDesc("Connectors point to the subtopic with an arrowhead. Used for connectors created from now on.")
+      .setDesc("Connectors point to the subtopic with an arrowhead. Used for connectors created from now on, and by Reset all.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.arrows).onChange(async (v) => {
           this.plugin.settings.arrows = v;
@@ -599,7 +605,7 @@ class MindMapSettingTab extends PluginSettingTab {
 
     new Setting(el)
       .setName("Colors")
-      .setDesc("Used for topics created from now on. Existing topics keep their colors.")
+      .setDesc("Used for topics created from now on. Existing topics keep their colors until Reset all in the panel's layout menu.")
       .setHeading();
 
     const central = new Setting(el).setName("Central topic").setDesc("Text, border and background.");

@@ -36,11 +36,11 @@ The last button in the panel (or the command "Pause or resume mind map editing")
 
 While editing text: Enter commits, Shift+Enter adds a line break, Tab/Insert commits and adds a child.
 
-Layout runs automatically after every change. Nodes can be dragged freely. The offset is remembered, and the node's subtree follows it. The layout button in the panel offers two modes. **Refresh layout** re-runs the layout and keeps those moves, which is useful after editing with plain Excalidraw tools (dragging a branch, changing a font size, deleting a connector). **Reset layout** discards the moves and puts topics back to their automatic positions, for the selected subtree or for all maps when nothing is selected.
+Layout runs automatically after every change. Nodes can be dragged freely. The offset is remembered, and the node's subtree follows it. The layout button in the panel offers three modes. **Refresh layout** re-runs the layout and keeps those moves, which is useful after editing with plain Excalidraw tools (dragging a branch, changing a font size, deleting a connector). **Reset layout** discards the moves and puts topics back to their automatic positions, for the selected subtree or for all maps when nothing is selected. **Reset all** (also a command) goes further and resets the whole map of the selected topic, or every map when nothing is selected, as if every topic had just been created: it discards the moves and restyles topics, summaries, connectors, braces and boundaries from the current settings, with the main topics taking the branch colors in turn. Texts, fonts and collapsed topics stay as they are. Like every operation, it is one undo step.
 
 Every operation is a single undo step.
 
-Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), boundaries (line, background, title text, title background), and the branch colors that main topics take in turn. Changes apply to topics created afterwards. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards.
+Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), boundaries (line, background, title text, title background), and the branch colors that main topics take in turn. Changes apply to topics created afterwards, and to existing maps with **Reset all**. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards, or on all of them with Reset all.
 
 ## Data model
 
