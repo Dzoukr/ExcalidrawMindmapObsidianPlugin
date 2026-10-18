@@ -10,6 +10,7 @@ export interface PanelActions {
   edit(): void;
   remove(): void;
   nav(dir: Direction): void;
+  toggleFold(): void;
   relayout(): void;
   reset(): void;
   togglePause(): void;
@@ -21,11 +22,13 @@ export interface PanelState {
   summary: boolean; // that node is a summary topic
   siblings: boolean; // the selection is one or more sibling topics that can get a summary or a boundary
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
+  foldable: boolean; // that node can be collapsed or expanded
+  collapsed: boolean; // that node is collapsed
   canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 
-type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "left" | "up" | "down" | "right" | "layout" | "pause";
+type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "left" | "up" | "down" | "right" | "fold" | "layout" | "pause";
 
 /** Floating control bar docked at the bottom of an Excalidraw view. */
 export class FloatingPanel {
@@ -62,6 +65,7 @@ export class FloatingPanel {
     button(g3, "down", "arrow-down", "Select down", () => a.nav("down"));
     button(g3, "right", "arrow-right", "Select right", () => a.nav("right"));
     const g4 = group();
+    button(g4, "fold", "chevrons-down-up", "Collapse (Ctrl+/)", a.toggleFold);
     button(g4, "layout", "refresh-cw", "Reset layout", (b) => {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("Reset sizes only").setIcon("refresh-cw").onClick(a.relayout));
@@ -104,6 +108,13 @@ export class FloatingPanel {
     set("boundary", s.siblings);
     set("edit", s.node || s.boundary);
     set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary);
+    set("fold", s.foldable);
+    const fold = this.buttons.get("fold")!;
+    if (fold.dataset.collapsed !== String(s.collapsed)) {
+      fold.dataset.collapsed = String(s.collapsed);
+      setIcon(fold, s.collapsed ? "chevrons-up-down" : "chevrons-down-up");
+      fold.setAttr("aria-label", s.collapsed ? "Expand (Ctrl+/)" : "Collapse (Ctrl+/)");
+    }
     set("up", s.node && !s.root);
     set("down", s.node && !s.root);
   }

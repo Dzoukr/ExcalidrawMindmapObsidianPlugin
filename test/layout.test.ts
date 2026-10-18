@@ -127,3 +127,27 @@ test("free spot falls back to the right of everything when the view is full", ()
   const c = findFreeSpot(view, [{ x: -100, y: -100, w: 1500, h: 1000 }], { w: 200, h: 100 }, 20);
   assert.deepEqual(c, { x: 1400 + 20 + 100, y: 400 });
 });
+
+test("a folded node hides its subtree and takes only its own height", () => {
+  const sum = node("s", "R");
+  const a = node("a", "R", [node("a1", "R"), node("a2", "R")]);
+  a.summaries = [{ node: sum, covers: ["a1", "a2"] }];
+  a.boundaries = [{ id: "f", covers: ["a1"] }];
+  a.folded = true;
+  const root = node("r", null, [a, node("b", "R")]);
+  const { boxes: b, braces, boundaries } = computeLayout(root, size, zero, { x: 0, y: 0 });
+  for (const id of ["a1", "a2", "s"]) assert.equal(b.has(id), false);
+  assert.equal(braces.size, 0);
+  assert.equal(boundaries.size, 0);
+  const plain = computeLayout(node("r", null, [node("a", "R"), node("b", "R")]), size, zero, { x: 0, y: 0 }).boxes;
+  assert.deepEqual(b.get("a"), plain.get("a"));
+  assert.deepEqual(b.get("b"), plain.get("b"));
+});
+
+test("hidden nodes keep their offsets", () => {
+  const a = node("a", "R", [node("a1", "R")]);
+  a.folded = true;
+  const info = (id: string): PlacedInfo => ({ x: 0, y: 0, lx: 0, ly: 0, ox: id === "a1" ? 7 : 0, oy: 0 });
+  const o = updateOffsets(node("r", null, [a]), info);
+  assert.equal(o.has("a1"), false);
+});

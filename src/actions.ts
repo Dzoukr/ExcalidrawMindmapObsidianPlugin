@@ -2,12 +2,12 @@ import { Notice } from "obsidian";
 import { El, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import { Box, Brace, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, updateOffsets } from "./layout";
 import {
-  KEY, MMBoundary, MMNode, MindMap, NodeData, boundTextId, boundaryData, buildMap, edgeData, nodeData, resolveNodeElement,
-  rootIdOf, subtree, titleData,
+  HIDDEN_KEY, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, buildMap, edgeData,
+  isHidden, nodeData, resolveNodeElement, rootIdOf, subtree, titleData,
 } from "./model";
 import {
-  BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING, SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING,
-  boundaryColors, branchColor, connectorArrowhead, paddingFor, styleFor, summaryStyle,
+  BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING,
+  SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, boundaryColors, branchColor, connectorArrowhead, paddingFor, styleFor, summaryStyle,
 } from "./styles";
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -63,6 +63,25 @@ export function selectedBoundary(view: ExcalidrawView): string | null {
     found.add(b);
   }
   return found.size === 1 ? [...found][0] : null;
+}
+
+/** The topic whose fold badge (alone) is selected, if any. */
+export function selectedBadge(view: ExcalidrawView): string | null {
+  const api = view.excalidrawAPI;
+  if (!api) return null;
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const ids = Object.keys(sel).filter((k) => sel[k]);
+  if (!ids.length || ids.length > 2) return null; // the badge, maybe with its text
+  const byId = new Map(api.getSceneElements().map((e) => [e.id, e]));
+  let found: string | null = null;
+  for (const id of ids) {
+    let el = byId.get(id);
+    if (el?.type === "text" && el.containerId) el = byId.get(el.containerId);
+    const node = badgeData(el)?.node;
+    if (!node || (found && found !== node)) return null;
+    found = node;
+  }
+  return found;
 }
 
 /** Whether a boundary title is being edited. */
@@ -306,6 +325,54 @@ function createBoundary(ea: any, rootId: string, parent: MMNode, covers: MMNode[
   return [frame, ...createTitle(ea, rootId, id, { x: first.el.x, y: first.el.y - 30 }, first.el.roughness, font)];
 }
 
+/** Fold badge of a topic: a circle with the count of hidden topics, added to the scene. */
+function createBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, count: string): [El, El] {
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: "#ffffff",
+    backgroundColor: n.el.strokeColor,
+    fillStyle: "solid",
+    strokeWidth: 1,
+    strokeStyle: "solid",
+    roughness: n.el.roughness,
+    roundness: null,
+    opacity: 100,
+    angle: 0,
+    fontFamily: n.text?.fontFamily ?? 1,
+    fontSize: BADGE_FONT_SIZE,
+    textAlign: "center",
+    verticalAlign: "middle",
+  });
+  const id: string = ea.addText(n.el.x + n.el.width, n.el.y, count, {
+    box: "ellipse",
+    boxPadding: BADGE_PADDING.padX,
+    boxStrokeColor: n.el.strokeColor,
+    textAlign: "center",
+    textVerticalAlign: "middle",
+  });
+  const els = ea.getElements() as El[];
+  for (const el of els) if (el.id === id) el.customData = { [KEY]: { badge: true, self: id, root: rootId, node: n.id } };
+  els.sort((a, b) => (a.type === "text" ? 1 : 0) - (b.type === "text" ? 1 : 0));
+  els.forEach((el) => tx.add(el));
+  ea.clear();
+  return [els[0], els[1]];
+}
+
+/** Hides an element, invisible and locked, keeping its own opacity and lock to restore, or shows it again. */
+function setHidden(tx: SceneTx, id: string, hidden: boolean) {
+  const el = tx.get(id);
+  if (!el) return;
+  const saved = el.customData?.[HIDDEN_KEY];
+  if (hidden) {
+    if (saved && el.opacity === 0 && el.locked) return;
+    const keep = saved ?? { opacity: el.opacity ?? 100, locked: !!el.locked };
+    tx.patch(id, { opacity: 0, locked: true, customData: { ...el.customData, [HIDDEN_KEY]: keep } });
+  } else if (saved) {
+    const { [HIDDEN_KEY]: _, ...rest } = el.customData!;
+    tx.patch(id, { opacity: saved.opacity, locked: saved.locked, customData: rest });
+  }
+}
+
 /** Deletes the element with any text bound to it. */
 function deleteWithText(tx: SceneTx, el: El) {
   tx.delete(el.id);
@@ -396,7 +463,8 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
   );
 
   for (const n of map.nodes.values()) {
-    const b = boxes.get(n.id)!;
+    const b = boxes.get(n.id);
+    if (!b) continue; // hidden by a folded topic, stays where it was
     const s = sizes.get(n.id)!;
     const o = offsets.get(n.id) ?? { x: 0, y: 0 };
     const data: NodeData = { ...n.data, parent: n.parent?.id ?? null, lx: b.x, ly: b.y, ox: o.x, oy: o.y };
@@ -412,7 +480,7 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
   for (const el of map.strayBoundaries) deleteWithText(tx, el);
 
   for (const n of map.nodes.values()) {
-    if (!n.parent || n.covers) continue;
+    if (!n.parent || n.covers || !boxes.has(n.id)) continue;
     const { start, end } = edgePoints(boxes.get(n.parent.id)!, boxes.get(n.id)!, n.side as Side);
     const edge = map.edges.get(n.id);
     if (!edge) {
@@ -441,7 +509,43 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
     if (!same) tx.patch(brace.id, { x: b.x, y: b.y, points: pts, width: b.w, height: b.h });
   }
   for (const e of map.strayBraces) tx.delete(e.id);
+
+  for (const n of map.nodes.values()) {
+    const box = boxes.get(n.id);
+    const badge = map.badges.get(n.id);
+    if (n.folded && box) placeBadge(tx, ea, rootId, n, box, badge);
+    else if (badge) deleteWithText(tx, badge.el);
+  }
+  for (const el of map.strayBadges) deleteWithText(tx, el);
+
+  // Everything of a hidden topic turns invisible and locked, and visible again once shown.
+  for (const n of map.nodes.values()) {
+    const hidden = !boxes.has(n.id);
+    for (const el of [n.el, n.text, map.edges.get(n.id), map.braces.get(n.id)]) if (el) setHidden(tx, el.id, hidden);
+    for (const b of n.boundaries) {
+      const h = !boundaries.has(b.id);
+      for (const el of [b.el, b.title, b.titleText]) if (el) setHidden(tx, el.id, h);
+    }
+  }
   return map;
+}
+
+/** Puts the badge with the count of hidden topics just outside the folded topic, creating or updating it. */
+function placeBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, box: Box, badge: MMBadge | undefined) {
+  const count = String(subtree(n).length - 1);
+  let el = badge?.el;
+  let text = badge?.text ?? null;
+  if (!el || !text) {
+    if (el) deleteWithText(tx, el);
+    [el, text] = createBadge(tx, ea, rootId, n, count);
+  } else if (text.originalText !== count) {
+    tx.patch(text.id, { text: count, originalText: count });
+    text = tx.get(text.id)!;
+  }
+  const s = measureBox(ea, text, BADGE_PADDING);
+  const w = Math.max(s.w, s.h);
+  const x = n.side === "L" ? box.x - BADGE_GAP - w : box.x + box.w + BADGE_GAP;
+  placeBox(tx, el, text, { x, y: box.y + box.h / 2 - s.h / 2, w, h: s.h }, s, BADGE_PADDING);
 }
 
 /** Runs a mind map mutation in one transaction and one undo step. */
@@ -494,7 +598,7 @@ export async function newMap(view: ExcalidrawView) {
     const st = tx.api.getAppState();
     const z = st.zoom?.value ?? 1;
     const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
-    const obstacles = tx.live().map(boundsOf);
+    const obstacles = tx.live().filter((e) => !e.customData?.[HIDDEN_KEY]).map(boundsOf);
     const c = findFreeSpot(visible, obstacles, NEW_MAP_AREA, NEW_MAP_GAP);
     const id = createNode(tx, ea, {
       depth: 0,
@@ -515,6 +619,7 @@ export async function addChild(view: ExcalidrawView, parentId: string) {
     const found = mapOf(tx, parentId);
     if (!found) return null;
     const { map, node } = found;
+    setFolded(tx, node, false); // like XMind, a new subtopic unfolds the topic
     let side: Side | undefined;
     let branch: Branch;
     if (node.depth === 0) {
@@ -586,6 +691,8 @@ function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
     const brace = map.braces.get(x.id);
     if (brace) tx.delete(brace.id);
     for (const b of x.boundaries) deleteBoundaryEls(tx, b);
+    const badge = map.badges.get(x.id);
+    if (badge) deleteWithText(tx, badge.el);
     // Unbind other arrows that pointed at the deleted node.
     for (const b of x.el.boundElements ?? []) {
       const a = tx.get(b.id);
@@ -613,6 +720,7 @@ export async function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot
       for (const e of map.strayEdges) removeEdge(tx, e);
       for (const e of map.strayBraces) tx.delete(e.id);
       for (const e of map.strayBoundaries) deleteWithText(tx, e);
+      for (const e of map.strayBadges) deleteWithText(tx, e);
       tx.api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
       return null;
     }
@@ -793,7 +901,7 @@ export function navigate(view: ExcalidrawView, nodeId: string, dir: Direction) {
     if (n.depth === 0 || n.side === side) {
       // Outward: the children, or for a leaf the summary spanning it.
       const summaries = n.parent?.summaries.filter((s) => s.covers.includes(n.id)).map((s) => s.node) ?? [];
-      target = closest(n.children.filter((c) => c.side === side)) ?? closest(summaries);
+      target = closest((n.folded ? [] : n.children).filter((c) => c.side === side)) ?? closest(summaries);
     } else {
       // Inward: a summary goes back to the topics it spans.
       target = n.covers ? closest(n.covers.map((id) => map.nodes.get(id)!)) : n.parent;
@@ -801,11 +909,63 @@ export function navigate(view: ExcalidrawView, nodeId: string, dir: Direction) {
   } else if (n.depth > 0) {
     const up = dir === "up";
     const peers = [...map.nodes.values()].filter(
-      (m) => m !== n && m.depth === n.depth && m.side === n.side && !m.covers === !n.covers,
+      (m) => m !== n && m.depth === n.depth && m.side === n.side && !m.covers === !n.covers && !isHidden(m),
     );
     target = closest(peers.filter((m) => (up ? cy(m) < cy(n) - 1 : cy(m) > cy(n) + 1)));
   }
   if (target) select(view, target.id);
+}
+
+function setFolded(tx: SceneTx, n: MMNode, folded: boolean) {
+  if (!!n.data.folded === folded) return;
+  const { folded: _, ...rest } = n.data;
+  tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: folded ? { ...rest, folded } : rest } });
+}
+
+const canFold = (n: MMNode) => !!n.parent && (n.children.length > 0 || n.summaries.length > 0);
+const topics = (n: MMNode) => [...n.children, ...n.summaries.map((s) => s.node)];
+
+/** Whether collapse and expand apply to the node: a topic with subtopics, or a central topic with main topics that have some. */
+const foldable = (n: MMNode) => (n.parent ? canFold(n) : topics(n).some(canFold));
+
+/** A topic is collapsed when folded; the central topic, which never folds, when all its main topics with subtopics are. */
+const collapsed = (n: MMNode) => (n.parent ? !!n.folded : topics(n).filter(canFold).every((c) => c.folded));
+
+/** Whether the node can be collapsed or expanded, and whether it is collapsed now. */
+export function foldState(view: ExcalidrawView, nodeId: string): { foldable: boolean; collapsed: boolean } {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const d = nodeData(els.find((e) => e.id === nodeId));
+  const n = d ? buildMap(els, d.root)?.nodes.get(nodeId) : undefined;
+  return n && foldable(n) ? { foldable: true, collapsed: collapsed(n) } : { foldable: false, collapsed: false };
+}
+
+/** Folds or unfolds every topic with subtopics in the node's subtree, the node included. */
+function foldSubtree(tx: SceneTx, ea: any, map: MindMap, node: MMNode, folded: boolean) {
+  for (const n of subtree(node)) setFolded(tx, n, folded && canFold(n));
+  layoutMap(tx, ea, map.root.id);
+}
+
+/**
+ * Collapses the topic with everything below it, or expands it all again, like XMind's Collapse/Expand.
+ * On the central topic, it collapses or expands all main topics.
+ */
+export async function toggleFold(view: ExcalidrawView, nodeId: string) {
+  const done = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found || !foldable(found.node)) return false;
+    foldSubtree(tx, ea, found.map, found.node, !collapsed(found.node));
+    return true;
+  });
+  if (done) await focusNode(view, nodeId, false);
+}
+
+/** Expands the topic with everything below it and selects it. */
+export async function unfold(view: ExcalidrawView, nodeId: string) {
+  run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (found) foldSubtree(tx, ea, found.map, found.node, false);
+  });
+  await focusNode(view, nodeId, false);
 }
 
 function rootsIn(els: readonly El[]): string[] {

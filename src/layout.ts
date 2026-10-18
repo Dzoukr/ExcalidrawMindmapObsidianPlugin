@@ -11,6 +11,7 @@ export interface LNode {
   children: LNode[];
   summaries?: LSummary[];
   boundaries?: LBoundary[];
+  folded?: boolean; // children, summaries and boundaries are hidden and left out of the layout
 }
 
 /** Summary topic attached to a range of the parent's children, drawn beyond a brace spanning their subtrees. */
@@ -96,12 +97,25 @@ function segments(kids: LNode[], summaries: LSummary[] | undefined): Segment[] {
   return out;
 }
 
+/** The tree as shown: a folded node keeps none of its children, summaries and boundaries. */
+function shown(n: LNode): LNode {
+  if (n.folded) return { id: n.id, side: n.side, children: [] };
+  return {
+    id: n.id,
+    side: n.side,
+    children: n.children.map(shown),
+    summaries: n.summaries?.map((s) => ({ node: shown(s.node), covers: s.covers })),
+    boundaries: n.boundaries,
+  };
+}
+
 /**
  * Turns manual moves since the last layout into per-node offsets.
  * A node moved together with its parent keeps its offset, so dragging a whole subtree
  * only records the offset on the subtree root.
  */
-export function updateOffsets(root: LNode, info: (id: string) => PlacedInfo): Map<string, Vec> {
+export function updateOffsets(tree: LNode, info: (id: string) => PlacedInfo): Map<string, Vec> {
+  const root = shown(tree); // hidden nodes keep their offsets
   const result = new Map<string, Vec>();
   const observed = (id: string): Vec => {
     const i = info(id);
@@ -128,13 +142,15 @@ export function updateOffsets(root: LNode, info: (id: string) => PlacedInfo): Ma
  * A summary sits beyond the summarized subtrees, centered on them, and its range gets extra room
  * when the summary's own subtree is taller. A boundary frames its subtrees, with room kept above
  * for its title. Summaries and boundaries take in the ones within their range.
+ * Nodes hidden by a folded ancestor get no box.
  */
 export function computeLayout(
-  root: LNode,
+  tree: LNode,
   size: (id: string) => Size,
   offset: (id: string) => Vec,
   rootCenter: Vec,
 ): Layout {
+  const root = shown(tree);
   const subtreeHeight = new Map<string, number>();
 
   // Extra room above the first and below the last child a boundary encloses.

@@ -1,8 +1,8 @@
 import { App, ItemView, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
 import {
   Direction, addBoundary, addChild, addSibling, addSummary, areSiblingTopics, commitEditing, deleteBoundary, deleteNode,
-  editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap, relayout, resetLayout, selectedBoundary,
-  selectedNode, selectedNodes,
+  editBoundaryTitle, editNode, editingNode, editingTitle, foldState, moveNode, navigate, newMap, relayout, resetLayout, selectedBadge,
+  selectedBoundary, selectedNode, selectedNodes, toggleFold, unfold,
 } from "./actions";
 import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { nodeData, titleData } from "./model";
@@ -39,6 +39,7 @@ interface ViewState {
   editing: El | null; // text element being edited, to detect when editing ends
   pending: ((nodeId: string) => unknown) | null; // action to run once editing ends
   raf: number;
+  badge: string | null; // topic whose fold badge was clicked, so the click unfolds it once
 }
 
 const ARROWS: Record<string, Direction> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
@@ -105,6 +106,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "add-boundary",
       name: "Add boundary around selected topics",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.bound(v)),
+    });
+    this.addCommand({
+      id: "toggle-fold",
+      name: "Collapse or expand selected topic",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => toggleFold(v, id))),
     });
     this.addCommand({
       id: "relayout",
@@ -198,7 +204,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     }
     if (existing) this.detach(existing);
 
-    const s: ViewState = { view, api, panel: new FloatingPanel(this.panelActions(view)), editing: null, pending: null, raf: 0 };
+    const s: ViewState = {
+      view, api, panel: new FloatingPanel(this.panelActions(view)), editing: null, pending: null, raf: 0, badge: null,
+    };
     s.panel.mount(view.contentEl);
     s.unsubscribe = api.onChange?.((_els, appState) => this.onSceneChange(s, appState));
     this.states.set(view, s);
@@ -223,9 +231,17 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (!s.raf) {
       s.raf = requestAnimationFrame(() => {
         s.raf = 0;
+        this.checkBadge(s);
         this.refreshPanel(s);
       });
     }
+  }
+
+  /** Clicking a fold badge selects it: expand its topic, like XMind's expand button. */
+  private checkBadge(s: ViewState) {
+    const node = this.paused || s.api.getAppState().viewModeEnabled ? null : selectedBadge(s.view);
+    if (node && node !== s.badge) unfold(s.view, node);
+    s.badge = node;
   }
 
   /** Text editing of a node ended: re-layout to fit the new text, then run a queued action. */
@@ -247,12 +263,15 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const editing = editingNode(s.view);
     const selected = editing ? [editing] : selectedNodes(s.view);
     const node = selected.length === 1 ? selected[0] : null;
+    const fold = node ? foldState(s.view, node.id) : { foldable: false, collapsed: false };
     s.panel.update({
       node: !!node,
       root: !!node && nodeData(node)?.parent === null,
       summary: !!node && !!nodeData(node)?.summary,
       siblings: areSiblingTopics(selected),
       boundary: !editing && !!selectedBoundary(s.view),
+      foldable: fold.foldable,
+      collapsed: fold.collapsed,
       canDeleteRoot: this.settings.allowDeleteCentralTopic,
       paused: this.paused,
     });
@@ -313,6 +332,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       edit: () => this.edit(view),
       remove: () => this.remove(view),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
+      toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
       relayout: () => relayout(view, selectedNode(view)?.id),
       reset: () => resetLayout(view, selectedNode(view)?.id),
       togglePause: () => this.togglePause(),
@@ -332,11 +352,17 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
     // XMind's Alt+Up/Down reorders the topic among its siblings.
     const reorder = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown");
-    if (!plain && !reorder) return;
+    // XMind's Ctrl+/ (Cmd+/ on Mac) collapses or expands the topic; the physical key also counts on other keyboard layouts.
+    const fold = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "/" || e.code === "Slash");
+    if (!plain && !reorder && !fold) return;
 
     let action: ((id: string) => unknown) | null = null;
 
-    if (reorder) {
+    if (fold) {
+      if (appState.editingTextElement || !selectedNode(view)) return;
+      if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      action = (id) => toggleFold(view, id);
+    } else if (reorder) {
       if (appState.editingTextElement || !selectedNode(view)) return;
       if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       action = (id) => moveNode(view, id, e.key === "ArrowUp");

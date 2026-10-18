@@ -4,6 +4,9 @@ import type { LBoundary, LNode, Side } from "./layout";
 // Mind map structure is stored in element customData under this key.
 export const KEY = "mindmap";
 
+// Elements hidden by a folded topic keep their own opacity and lock state here, to restore when shown again.
+export const HIDDEN_KEY = "mindmapHidden";
+
 export interface NodeData {
   self: string; // element id at creation, a mismatch means the element is a pasted or duplicated copy
   root: string;
@@ -11,6 +14,7 @@ export interface NodeData {
   order: number;
   side?: Side; // level-1 nodes only
   summary?: string[]; // summary topic: ids of the siblings it spans, the range runs from the first to the last still present
+  folded?: boolean; // subtopics, summaries and boundaries are hidden
   ox?: number; // manual offset
   oy?: number;
   lx?: number; // last position placed by layout
@@ -37,6 +41,19 @@ export interface TitleData {
   self: string;
   root: string;
   boundary: string;
+}
+
+/** Count of hidden topics shown next to a folded topic; selecting it unfolds the topic. */
+export interface BadgeData {
+  badge: true;
+  self: string;
+  root: string;
+  node: string;
+}
+
+export interface MMBadge {
+  el: El;
+  text: El | null;
 }
 
 export interface MMBoundary extends LBoundary {
@@ -78,11 +95,13 @@ export interface MindMap {
   strayBraces: El[];
   boundaries: Map<string, MMBoundary>;
   strayBoundaries: El[]; // frames and titles left without a boundary to belong to
+  badges: Map<string, MMBadge>; // folded node id -> badge
+  strayBadges: El[];
 }
 
 export function nodeData(el: El | undefined | null): NodeData | null {
   const d = el?.customData?.[KEY];
-  if (!d || d.edge || d.boundary || d.boundaryTitle || d.self !== el!.id) return null;
+  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.self !== el!.id) return null;
   return d as NodeData;
 }
 
@@ -99,6 +118,11 @@ export function boundaryData(el: El | undefined | null): BoundaryData | null {
 export function titleData(el: El | undefined | null): TitleData | null {
   const d = el?.customData?.[KEY];
   return d?.boundaryTitle && d.self === el!.id ? (d as TitleData) : null;
+}
+
+export function badgeData(el: El | undefined | null): BadgeData | null {
+  const d = el?.customData?.[KEY];
+  return d?.badge && d.self === el!.id ? (d as BadgeData) : null;
 }
 
 /** Root id of the map a node, boundary frame or boundary title belongs to. */
@@ -187,9 +211,11 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     walk(n);
   }
 
+  // The central topic can't be folded, and a topic with nothing under it has nothing to hide.
   const finish = (n: MMNode, depth: number, side: Side | null) => {
     n.depth = depth;
     n.side = side;
+    n.folded = depth > 0 && !!n.data.folded && (n.children.length > 0 || n.summaries.length > 0);
     n.children.sort((a, b) => a.data.order - b.data.order);
     for (const c of n.children) finish(c, depth + 1, depth === 0 ? sideOf(c) : side);
     for (const s of n.summaries) finish(s.node, depth + 1, depth === 0 ? sideOf(s.node) : side);
@@ -253,7 +279,28 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     b.title = el;
     b.titleText = text && !text.isDeleted ? text : null;
   }
-  return { root, nodes, edges, strayEdges, braces, strayBraces, boundaries, strayBoundaries };
+
+  const badges = new Map<string, MMBadge>();
+  const strayBadges: El[] = [];
+  for (const el of elements) {
+    if (el.isDeleted) continue;
+    const d = badgeData(el);
+    if (!d || d.root !== rootId) continue;
+    if (!nodes.get(d.node)?.folded || badges.has(d.node)) {
+      strayBadges.push(el);
+      continue;
+    }
+    const tid = boundTextId(el);
+    const text = tid ? byId.get(tid) : undefined;
+    badges.set(d.node, { el, text: text && !text.isDeleted ? text : null });
+  }
+  return { root, nodes, edges, strayEdges, braces, strayBraces, boundaries, strayBoundaries, badges, strayBadges };
+}
+
+/** Whether a folded ancestor (or the topic owning a summary) hides the node. */
+export function isHidden(n: MMNode): boolean {
+  for (let p = n.parent; p; p = p.parent) if (p.folded) return true;
+  return false;
 }
 
 /** The node with its children and summaries, recursively. */

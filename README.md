@@ -15,10 +15,13 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | F2 / Space | Edit text |
 | Arrow keys | Move selection (right/left = child/parent, mirrored on the left side) |
 | Alt+Up / Alt+Down | Move the topic up or down among its siblings |
+| Ctrl+/ (Cmd+/ on Mac) | Collapse or expand the topic |
 
 **Add summary** in the panel (or the command "Add summary to selected topics") works like XMind's Summary: select one or more sibling topics and it adds a summary topic behind a brace spanning them, and any topics between them. A summary can have its own subtopics. A sibling added to a summarized topic (Enter / Shift+Enter) joins the summary, while a topic added to the parent (Tab / Insert) stays outside it. Deleting all the topics it spans deletes the summary too.
 
 **Add boundary** (or the command "Add boundary around selected topics") draws a dashed frame with a title tab around the selected sibling topics, any topics between them, and their subtopics, like XMind's Boundary. The title is edited right away. Select the frame or its title to edit the title (Space / F2) or delete the boundary (Delete), which keeps the topics. Siblings added with Enter join the boundary, and boundaries can be nested.
+
+**Collapse** (Ctrl+/, the fold button in the panel, or the command "Collapse or expand selected topic") works as a toggle, like XMind's Collapse/Expand. On a topic it collapses the topic together with everything below it, hiding its subtopics, summaries and boundaries; the same key or button expands it all again. On the central topic, which can't be collapsed itself, it collapses or expands all main topics. A badge next to a collapsed topic shows how many topics are hidden, and clicking it expands the topic. Adding a subtopic to a collapsed topic expands it as well.
 
 The last button in the panel (or the command "Pause or resume mind map editing") pauses the plugin: its keys are left to Excalidraw, text edits no longer re-run the layout, and the other buttons are disabled until you resume. A restart resumes it too.
 
@@ -32,11 +35,13 @@ Colors are set in the plugin settings: the central topic (text, border, backgrou
 
 ## Data model
 
-- Node: rectangle with bound text, `customData.mindmap = { self, root, parent, order, side, ox, oy, lx, ly }`.
+- Node: rectangle with bound text, `customData.mindmap = { self, root, parent, order, side, folded, ox, oy, lx, ly }`.
 - Summary: a node whose `parent` is the parent of the topics it spans, with `summary` listing their ids. The range runs from the first to the last still present.
 - Connector: arrow bound to both nodes, `customData.mindmap = { edge, root, parent, child }`.
 - Brace: line next to the summarized topics, `customData.mindmap = { brace, root, summary }`.
 - Boundary: dashed rectangle behind the map, `customData.mindmap = { boundary, self, root, parent, topics }`, and its title, a rectangle with bound text, `customData.mindmap = { boundaryTitle, self, root, boundary }`.
+- Fold badge: ellipse with bound text next to a collapsed topic, `customData.mindmap = { badge, self, root, node }`.
+- Hidden elements (everything under a collapsed topic) get opacity 0 and are locked; their own opacity and lock are kept in `customData.mindmapHidden` and restored when shown again.
 - Copies of nodes (paste, Alt-drag) are ignored by the mind map, because `self` no longer matches the element id.
 
 ## Development

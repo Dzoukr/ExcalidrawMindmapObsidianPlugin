@@ -81,6 +81,9 @@ export function styleFor(depth: number, branch: Branch): NodeStyle {
 export const SUMMARY_PADDING = { padX: 16, padY: 8 };
 export const TITLE_PADDING = { padX: 12, padY: 4 };
 export const TITLE_FONT_SIZE = 16;
+export const BADGE_PADDING = { padX: 5, padY: 2 };
+export const BADGE_FONT_SIZE = 12;
+export const BADGE_GAP = 6; // folded topic to its badge
 
 export function boundaryColors() {
   return colors.boundary;

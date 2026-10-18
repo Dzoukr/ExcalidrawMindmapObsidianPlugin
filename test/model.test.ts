@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { El } from "../src/excalidraw.ts";
-import { KEY, boundaryData, buildMap, nodeData, titleData } from "../src/model.ts";
+import { KEY, boundaryData, buildMap, isHidden, nodeData, titleData } from "../src/model.ts";
 
 const el = (id: string, data: object, extra: Partial<El> = {}): El =>
   ({ id, type: "rectangle", x: 0, y: 0, width: 10, height: 10, customData: { [KEY]: data }, ...extra });
@@ -39,4 +39,24 @@ test("boundary whose topics are all gone is stray, with its title", () => {
   const map = buildMap(els, "r")!;
   assert.equal(map.boundaries.size, 0);
   assert.deepEqual(map.strayBoundaries.map((e) => e.id).sort(), ["f", "t"]);
+});
+
+test("only a topic with subtopics folds, never the central topic, and a stale badge is stray", () => {
+  const els = [
+    el("r", { self: "r", root: "r", parent: null, order: 0, folded: true }),
+    el("a", { self: "a", root: "r", parent: "r", order: 0, side: "R", folded: true }),
+    el("a1", { self: "a1", root: "r", parent: "a", order: 0 }),
+    el("b", { self: "b", root: "r", parent: "r", order: 1, side: "R", folded: true }),
+    el("ba", { badge: true, self: "ba", root: "r", node: "a" }),
+    el("bb", { badge: true, self: "bb", root: "r", node: "b" }),
+  ];
+  const map = buildMap(els, "r")!;
+  assert.equal(map.root.folded, false);
+  assert.equal(map.nodes.get("a")!.folded, true);
+  assert.equal(map.nodes.get("b")!.folded, false);
+  assert.equal(isHidden(map.nodes.get("a1")!), true);
+  assert.equal(isHidden(map.nodes.get("a")!), false);
+  assert.deepEqual([...map.badges.keys()], ["a"]);
+  assert.deepEqual(map.strayBadges.map((e) => e.id), ["bb"]);
+  assert.equal(nodeData(els[4]), null);
 });
