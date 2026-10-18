@@ -61,6 +61,13 @@ body.is-phone .mm-panel {
   gap: 2px;
   padding: 2px;
   max-width: calc(100% - 16px);
+  /* More buttons than fit a narrow phone: the row scrolls sideways. */
+  overflow-x: auto;
+  justify-content: flex-start;
+}
+
+body.is-phone .mm-group {
+  flex-shrink: 0;
 }
 
 body.is-phone .mm-group + .mm-group {

@@ -11,7 +11,9 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | Tab / Insert | Add child |
 | Enter | Add sibling below |
 | Shift+Enter | Add sibling above |
-| Delete / Backspace | Delete node with its subtopics (the central topic deletes the whole map, if enabled in settings) |
+| Delete / Backspace | Delete the selected topics with their subtopics (the central topic deletes the whole map, if enabled in settings) |
+| Ctrl+C / Ctrl+X | Copy or cut the selected topics as a Markdown bullet list |
+| Ctrl+V | Paste a Markdown outline or text as subtopics of the selected topic |
 | F2 / Space | Edit text |
 | Arrow keys | Move selection (right/left = child/parent, mirrored on the left side) |
 | Alt+Up / Alt+Down | Move the topic up or down among its siblings |
@@ -21,6 +23,10 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 **Add summary** in the panel (or the command "Add summary to selected topics") works like XMind's Summary: select one or more sibling topics and it adds a summary topic behind a brace spanning them, and any topics between them. A summary can have its own subtopics. A sibling added to a summarized topic (Enter / Shift+Enter) joins the summary, while a topic added to the parent (Tab / Insert) stays outside it. Deleting all the topics it spans deletes the summary too.
 
 **Add boundary** (or the command "Add boundary around selected topics") draws a dashed frame with a title tab around the selected sibling topics, any topics between them, and their subtopics, like XMind's Boundary. The title is edited right away. Select the frame or its title to edit the title (Space / F2) or delete the boundary (Delete), which keeps the topics. Siblings added with Enter join the boundary, and boundaries can be nested.
+
+**Links.** Typing `[[` while editing a topic opens Excalidraw's link suggester for notes, headings, blocks and tags; Enter or Tab picks the link instead of committing the topic. The Excalidraw plugin turns the link into the topic's link, so Ctrl+click (or the link icon) opens the note. Links are kept when topics are copied as Markdown, and pasted outlines keep theirs.
+
+**Markdown outlines.** Copying selected topics (Ctrl+C, or the command "Copy selected topics as Markdown") puts their branches on the clipboard as a bullet list indented with tabs, collapsed subtopics included, ready to paste into a note. Cut does the same and deletes the topics. Summaries and boundaries are not part of the outline. Pasting (Ctrl+V) with a topic selected adds the clipboard's text as its subtopics: bullet and numbered lists nest by indentation, headings nest by level with the lists below them, a line indented under a list item continues that topic on a new line, and every other line becomes a topic of its own. With nothing selected, Ctrl+V is Excalidraw's own paste; the command "Insert new mind map from Markdown outline in the clipboard" builds a new map instead, with a single top item as the central topic. Copied Excalidraw elements and images always paste as usual. The panel has Copy and Paste buttons too, for phones and tablets; Paste with no topic selected builds a new map.
 
 **Promote** (Alt+arrow toward the central topic, a panel button, or a command) makes the topic, with its subtopics, a sibling of its parent, placed right after it; a main topic can't be promoted. **Demote** (Alt+arrow away from the central topic) makes it the last subtopic of the sibling above, expanding that sibling if it's collapsed. A summary or boundary spanning only the moved topic is removed. A topic that becomes a main topic gets the next branch color and the main topic look, and one that stops being a main topic gets the subtopic look and the color of its new branch; its subtopics take the new color too. Other moves keep the styling.
 

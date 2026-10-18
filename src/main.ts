@@ -1,11 +1,13 @@
-import { App, ItemView, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
+import { App, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
 import {
-  Direction, addBoundary, addChild, changeLevel, demote, promote, addSibling, addSummary, areSiblingTopics, commitEditing, deleteBoundary, deleteNode,
-  editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap, relayout, resetLayout, selectedBadge,
-  selectedBoundary, selectedNode, selectedNodes, toggleFold, topicState, unfold,
+  Direction, addBoundary, addChild, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
+  deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap,
+  newMapFromOutline, outlineMarkdown, pasteOutline, promote, relayout, resetLayout, selectedBadge, selectedBoundary,
+  selectedNode, selectedNodes, selectedTopics, toggleFold, topicState, unfold,
 } from "./actions";
 import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { nodeData, titleData } from "./model";
+import { isOutline } from "./outline";
 import { FloatingPanel, PanelActions } from "./panel";
 import { Colors, DEFAULT_COLORS, setArrows, setColors } from "./styles";
 
@@ -70,10 +72,13 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       return false;
     });
 
-    this.registerDomEvent(window, "keydown", this.onKeyDown, { capture: true });
-    this.registerEvent(
-      this.app.workspace.on("window-open", (_w, win) => this.registerDomEvent(win, "keydown", this.onKeyDown, { capture: true })),
-    );
+    // Excalidraw copies and pastes through the clipboard events, so taking them first turns them into Markdown for topics.
+    const listen = (win: Window) => {
+      this.registerDomEvent(win, "keydown", this.onKeyDown, { capture: true });
+      for (const type of ["copy", "cut", "paste"] as const) this.registerDomEvent(win, type, this.onClipboard, { capture: true });
+    };
+    listen(window);
+    this.registerEvent(this.app.workspace.on("window-open", (_w, win) => listen(win)));
     this.registerEvent(this.app.workspace.on("layout-change", () => this.syncViews()));
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
@@ -96,6 +101,21 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "new-mind-map",
       name: "Insert new mind map",
       checkCallback: (checking) => this.withActiveView(checking, (v) => newMap(v)),
+    });
+    this.addCommand({
+      id: "copy-outline",
+      name: "Copy selected topics as Markdown",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.copyCommand(v)),
+    });
+    this.addCommand({
+      id: "paste-outline",
+      name: "Paste Markdown outline as subtopics of the selected topic",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.pasteCommand(v, false)),
+    });
+    this.addCommand({
+      id: "new-mind-map-from-outline",
+      name: "Insert new mind map from Markdown outline in the clipboard",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.pasteCommand(v, true)),
     });
     this.addCommand({
       id: "add-summary",
@@ -278,6 +298,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       node: !!node,
       root: !!node && nodeData(node)?.parent === null,
       summary: !!node && !!nodeData(node)?.summary,
+      topics: !editing && selectedTopics(s.view).length > 0,
       siblings: areSiblingTopics(selected),
       boundary: !editing && !!selectedBoundary(s.view),
       ...t,
@@ -330,6 +351,77 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.runOnNode(view, (id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic));
   }
 
+  // ---------- markdown outlines ----------
+
+  private async copyCommand(view: ExcalidrawView) {
+    const md = outlineMarkdown(view, selectedTopics(view).map((n) => n.id));
+    if (!md) return void new Notice("Select one or more topics to copy.");
+    try {
+      await navigator.clipboard.writeText(md);
+    } catch {
+      return void new Notice("Can't write to the clipboard.");
+    }
+    new Notice("Topics copied as Markdown.");
+  }
+
+  /** Pastes the clipboard's outline under the selected topic, or as a new map. */
+  private async pasteCommand(view: ExcalidrawView, asNewMap: boolean) {
+    const node = selectedNode(view);
+    if (!asNewMap && !node) return void new Notice("Select the topic to paste under.");
+    await this.pasteFromClipboard(view, asNewMap ? null : node!.id);
+  }
+
+  /** Panel paste: under the selected topic (or the one being edited), as a new map when no topic is selected. */
+  private paste(view: ExcalidrawView) {
+    if (editingNode(view)) return this.runOnNode(view, (id) => this.pasteFromClipboard(view, id));
+    this.pasteFromClipboard(view, selectedNode(view)?.id ?? null);
+  }
+
+  private async pasteFromClipboard(view: ExcalidrawView, nodeId: string | null) {
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      return void new Notice("Can't read the clipboard.");
+    }
+    if (!isOutline(text)) return void new Notice("The clipboard has no text to paste as topics.");
+    if (nodeId) await pasteOutline(view, nodeId, text);
+    else await newMapFromOutline(view, text);
+  }
+
+  /**
+   * Ctrl+C / Ctrl+X on selected topics copies their branches as a Markdown bullet list (cut deletes them),
+   * Ctrl+V on a selected topic adds the pasted outline or text as its subtopics. Anything else is left to Excalidraw.
+   */
+  private onClipboard = (e: ClipboardEvent) => {
+    if (this.paused || !e.isTrusted || !e.clipboardData) return;
+    const view = this.activeView();
+    if (!view) return;
+    const target = e.target as HTMLElement;
+    if (!view.containerEl.contains(target) && target !== target.ownerDocument?.body) return;
+    if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    const appState = view.excalidrawAPI!.getAppState();
+    if (appState.viewModeEnabled || appState.editingTextElement) return;
+
+    if (e.type === "paste") {
+      const node = selectedNode(view);
+      const text = e.clipboardData.getData("text/plain");
+      if (!node || e.clipboardData.files.length || !isOutline(text)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      pasteOutline(view, node.id, text);
+      return;
+    }
+    const ids = selectedTopics(view).map((n) => n.id);
+    const md = outlineMarkdown(view, ids);
+    if (!md) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    e.clipboardData.setData("text/plain", md);
+    if (e.type === "cut") deleteNodes(view, ids, this.settings.allowDeleteCentralTopic);
+    else new Notice("Topics copied as Markdown.");
+  };
+
   private panelActions(view: ExcalidrawView): PanelActions {
     const on = (action: (id: string) => unknown) => () => this.runOnNode(view, action);
     return {
@@ -342,6 +434,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       remove: () => this.remove(view),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
+      copy: () => this.copyCommand(view),
+      paste: () => this.paste(view),
       promote: () => this.runOnNode(view, (id) => promote(view, id)),
       demote: () => this.runOnNode(view, (id) => demote(view, id)),
       relayout: () => relayout(view, selectedNode(view)?.id),
@@ -384,6 +478,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       action = (id) => changeLevel(view, id, e.key === "ArrowRight" ? "right" : "left");
     } else if (appState.editingTextElement) {
+      // Excalidraw's [[link]] suggester is open: its Enter and Tab pick a link.
+      if (e.defaultPrevented || target.ownerDocument.body.querySelector(":scope > .suggestion-container")) return;
       if (editingTitle(view)) {
         // Enter commits a boundary title.
         if (e.key !== "Enter" || e.shiftKey) return;
@@ -411,7 +507,16 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
         e.stopImmediatePropagation();
         return;
       }
-      if (!selectedNode(view)) return;
+      if (!selectedNode(view)) {
+        // Several topics selected, maybe with their connectors: Delete removes them all.
+        const topics = e.key === "Delete" || e.key === "Backspace" ? selectedTopics(view) : [];
+        if (!topics.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        deleteNodes(view, topics.map((n) => n.id), this.settings.allowDeleteCentralTopic);
+        return;
+      }
       switch (e.key) {
         case "Tab":
           if (!e.shiftKey) action = (id) => addChild(view, id);

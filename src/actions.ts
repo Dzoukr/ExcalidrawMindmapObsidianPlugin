@@ -2,9 +2,10 @@ import { Notice } from "obsidian";
 import { El, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import { Box, Brace, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, updateOffsets } from "./layout";
 import {
-  HIDDEN_KEY, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, buildMap, edgeData,
-  isHidden, nodeData, resolveNodeElement, rootIdOf, subtree, titleData,
+  HIDDEN_KEY, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, braceData, buildMap,
+  edgeData, isHidden, nodeData, resolveNodeElement, rootIdOf, subtree, titleData,
 } from "./model";
+import { OutlineItem, parseOutline, toMarkdown } from "./outline";
 import {
   BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING,
   SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, boundaryColors, branchColor, connectorArrowhead, paddingFor, styleFor, summaryStyle,
@@ -46,6 +47,25 @@ export function selectedNodes(view: ExcalidrawView): El[] {
 export function selectedNode(view: ExcalidrawView): El | null {
   const nodes = selectedNodes(view);
   return nodes.length === 1 ? nodes[0] : null;
+}
+
+/**
+ * The mind map topics selected in the view, ignoring the connectors, braces, badges and boundaries
+ * selected along with them (as a selection box does); empty when anything else is selected.
+ */
+export function selectedTopics(view: ExcalidrawView): El[] {
+  const api = view.excalidrawAPI;
+  if (!api) return [];
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const byId = new Map(api.getSceneElements().map((e) => [e.id, e]));
+  const nodes = new Map<string, El>();
+  for (const id of Object.keys(sel).filter((k) => sel[k])) {
+    let el = byId.get(id);
+    if (el?.type === "text" && el.containerId) el = byId.get(el.containerId);
+    if (nodeData(el)) nodes.set(el!.id, el!);
+    else if (!edgeData(el) && !braceData(el) && !badgeData(el) && !boundaryData(el) && !titleData(el)) return [];
+  }
+  return [...nodes.values()];
 }
 
 /** The boundary whose frame or title (alone) is selected, if any. */
@@ -358,18 +378,22 @@ function createBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, count: str
   return [els[0], els[1]];
 }
 
-/** Hides an element, invisible and locked, keeping its own opacity and lock to restore, or shows it again. */
+/**
+ * Hides an element: invisible, locked and without its link icon, keeping its own opacity, lock and link
+ * to restore when shown again.
+ */
 function setHidden(tx: SceneTx, id: string, hidden: boolean) {
   const el = tx.get(id);
   if (!el) return;
   const saved = el.customData?.[HIDDEN_KEY];
   if (hidden) {
-    if (saved && el.opacity === 0 && el.locked) return;
-    const keep = saved ?? { opacity: el.opacity ?? 100, locked: !!el.locked };
-    tx.patch(id, { opacity: 0, locked: true, customData: { ...el.customData, [HIDDEN_KEY]: keep } });
+    if (saved && el.opacity === 0 && el.locked && !el.link && !el.hasTextLink) return;
+    const keep = saved ?? { opacity: el.opacity ?? 100, locked: !!el.locked, link: el.link ?? null, hasTextLink: !!el.hasTextLink };
+    tx.patch(id, { opacity: 0, locked: true, link: null, hasTextLink: false, customData: { ...el.customData, [HIDDEN_KEY]: keep } });
   } else if (saved) {
     const { [HIDDEN_KEY]: _, ...rest } = el.customData!;
-    tx.patch(id, { opacity: saved.opacity, locked: saved.locked, customData: rest });
+    const link = saved.link === undefined ? {} : { link: saved.link, hasTextLink: !!saved.hasTextLink };
+    tx.patch(id, { opacity: saved.opacity, locked: saved.locked, ...link, customData: rest });
   }
 }
 
@@ -596,24 +620,32 @@ const NEW_MAP_AREA = { w: 480, h: 160 };
 const NEW_MAP_GAP = 40;
 
 export async function newMap(view: ExcalidrawView) {
-  const id = run(view, (tx, ea) => {
-    const st = tx.api.getAppState();
-    const z = st.zoom?.value ?? 1;
-    const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
-    const obstacles = tx.live().filter((e) => !e.customData?.[HIDDEN_KEY]).map(boundsOf);
-    const c = findFreeSpot(visible, obstacles, NEW_MAP_AREA, NEW_MAP_GAP);
-    const id = createNode(tx, ea, {
-      depth: 0,
-      branch: branchColor(0),
-      data: { root: "", parent: null, order: 0 },
-      at: { x: c.x - 90, y: c.y - 30 },
-      fontFamily: st.currentItemFontFamily,
-      roughness: st.currentItemRoughness,
-    });
-    layoutMap(tx, ea, id);
-    return id;
-  });
+  const id = run(view, (tx, ea) => createMap(tx, ea));
   if (id) await focusNode(view, id, true);
+}
+
+/** Adds a new map at a free spot in view, its central topic with the text and subtopics given; returns the central topic. */
+function createMap(tx: SceneTx, ea: any, text?: string, items: OutlineItem[] = []): string {
+  const st = tx.api.getAppState();
+  const z = st.zoom?.value ?? 1;
+  const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
+  const obstacles = tx.live().filter((e) => !e.customData?.[HIDDEN_KEY]).map(boundsOf);
+  const c = findFreeSpot(visible, obstacles, NEW_MAP_AREA, NEW_MAP_GAP);
+  const id = createNode(tx, ea, {
+    depth: 0,
+    branch: branchColor(0),
+    text,
+    data: { root: "", parent: null, order: 0 },
+    at: { x: c.x - 90, y: c.y - 30 },
+    fontFamily: st.currentItemFontFamily,
+    roughness: st.currentItemRoughness,
+  });
+  if (items.length) {
+    const found = mapOf(tx, id)!;
+    addOutline(tx, ea, found.map, found.node, items);
+  }
+  layoutMap(tx, ea, id);
+  return id;
 }
 
 export async function addChild(view: ExcalidrawView, parentId: string) {
@@ -708,43 +740,55 @@ function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
 }
 
 /** Deletes the node with its subtopics; the central topic only when allowRoot, taking the whole map with it. */
-export async function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot: boolean) {
+export function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot: boolean) {
+  return deleteNodes(view, [nodeId], allowRoot);
+}
+
+/** Deletes the nodes with their subtopics in one undo step, then selects a topic next to the last one. */
+export async function deleteNodes(view: ExcalidrawView, nodeIds: string[], allowRoot: boolean) {
   const next = run(view, (tx, ea) => {
-    const found = mapOf(tx, nodeId);
-    if (!found) return null;
-    const { map, node } = found;
-    if (!node.parent) {
-      if (!allowRoot) {
-        new Notice("Deleting the central topic is disabled. Enable it in the Excalidraw Mind Map settings.");
-        return null;
-      }
-      deleteSubtree(tx, map, node);
-      for (const e of map.strayEdges) removeEdge(tx, e);
-      for (const e of map.strayBraces) tx.delete(e.id);
-      for (const e of map.strayBoundaries) deleteWithText(tx, e);
-      for (const e of map.strayBadges) deleteWithText(tx, e);
-      tx.api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
-      return null;
+    let next: string | null = null;
+    for (const id of nodeIds) {
+      const found = mapOf(tx, id); // nothing when it went with an earlier one
+      if (found) next = removeTopic(tx, ea, found.map, found.node, allowRoot) ?? next;
     }
-    const parent = node.parent;
-    let next: MMNode;
-    if (node.covers) {
-      next = map.nodes.get(node.covers[0])!;
-    } else {
-      const sibs = parent.children.filter((c) => c.side === node.side);
-      const i = sibs.indexOf(node);
-      next = sibs[i + 1] ?? sibs[i - 1] ?? parent;
-    }
-    const gone = new Set(subtree(node).map((x) => x.id));
-    deleteSubtree(tx, map, node);
-    // Like XMind, a summary goes once nothing is left for it to span.
-    for (const s of parent.summaries)
-      if (s.node !== node && s.covers.every((id) => gone.has(id))) deleteSubtree(tx, map, s.node);
-    for (const b of parent.boundaries) if (b.covers.every((id) => gone.has(id))) deleteBoundaryEls(tx, b);
-    layoutMap(tx, ea, map.root.id);
-    return next.id;
+    return next && !tx.get(next)?.isDeleted ? next : null;
   });
   if (next) await focusNode(view, next, false);
+}
+
+/** Deletes the node with its subtopics in the transaction; returns the topic to select next. */
+function removeTopic(tx: SceneTx, ea: any, map: MindMap, node: MMNode, allowRoot: boolean): string | null {
+  if (!node.parent) {
+    if (!allowRoot) {
+      new Notice("Deleting the central topic is disabled. Enable it in the Excalidraw Mind Map settings.");
+      return null;
+    }
+    deleteSubtree(tx, map, node);
+    for (const e of map.strayEdges) removeEdge(tx, e);
+    for (const e of map.strayBraces) tx.delete(e.id);
+    for (const e of map.strayBoundaries) deleteWithText(tx, e);
+    for (const e of map.strayBadges) deleteWithText(tx, e);
+    tx.api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
+    return null;
+  }
+  const parent = node.parent;
+  let next: MMNode;
+  if (node.covers) {
+    next = map.nodes.get(node.covers[0])!;
+  } else {
+    const sibs = parent.children.filter((c) => c.side === node.side);
+    const i = sibs.indexOf(node);
+    next = sibs[i + 1] ?? sibs[i - 1] ?? parent;
+  }
+  const gone = new Set(subtree(node).map((x) => x.id));
+  deleteSubtree(tx, map, node);
+  // Like XMind, a summary goes once nothing is left for it to span.
+  for (const s of parent.summaries)
+    if (s.node !== node && s.covers.every((id) => gone.has(id))) deleteSubtree(tx, map, s.node);
+  for (const b of parent.boundaries) if (b.covers.every((id) => gone.has(id))) deleteBoundaryEls(tx, b);
+  layoutMap(tx, ea, map.root.id);
+  return next.id;
 }
 
 /** Moves the node one position up or down among its siblings on the same side, like Alt+Up/Down in XMind. */
@@ -1076,6 +1120,89 @@ export function changeLevel(view: ExcalidrawView, nodeId: string, dir: "left" | 
   const side = d ? buildMap(els, d.root)?.nodes.get(nodeId)?.side : null;
   if (!side) return;
   return (side === "R") === (dir === "right") ? demote(view, nodeId) : promote(view, nodeId);
+}
+
+// ---------- markdown outlines ----------
+
+// The Excalidraw plugin keeps the Markdown source, with [[links]], in rawText and shows it parsed.
+const topicText = (n: MMNode) => n.text?.rawText ?? n.text?.originalText ?? n.text?.text ?? "";
+
+/** Subtopics top to bottom, on the right side first for the central topic; summaries are left out. */
+const ordered = (n: MMNode) => (n.parent ? n.children : [...n.children.filter((c) => c.side !== "L"), ...n.children.filter((c) => c.side === "L")]);
+
+const outlineOf = (n: MMNode): OutlineItem => ({ text: topicText(n), children: ordered(n).map(outlineOf) });
+
+/**
+ * The branches of the given topics as a Markdown bullet list, in map order, collapsed subtopics included.
+ * A branch inside another one given is part of that one. Summaries and boundaries are left out.
+ */
+export function outlineMarkdown(view: ExcalidrawView, nodeIds: string[]): string | null {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const ids = new Set(nodeIds);
+  const roots = new Set(nodeIds.map((id) => nodeData(els.find((e) => e.id === id))?.root).filter((r): r is string => !!r));
+  const items: OutlineItem[] = [];
+  for (const r of roots) {
+    const map = buildMap(els, r);
+    const walk = (n: MMNode) => {
+      if (ids.has(n.id)) return void items.push(outlineOf(n));
+      ordered(n).forEach(walk);
+      n.summaries.forEach((s) => walk(s.node));
+    };
+    if (map) walk(map.root);
+  }
+  return items.length ? toMarkdown(items) : null;
+}
+
+/** Adds the outline items, with everything under them, as subtopics of the node; returns the new subtopics. */
+function addOutline(tx: SceneTx, ea: any, map: MindMap, node: MMNode, items: OutlineItem[]): string[] {
+  const fontFamily = node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily;
+  const at = { x: node.el.x + node.el.width + 40, y: node.el.y };
+  // Like addChild: main topics alternate sides and take the next branch color, others the color of their branch.
+  let right = node.children.filter((c) => c.side === "R").length;
+  let count = node.children.length;
+  const inherited = node.parent ? branchOf(node.covers ? map.nodes.get(node.covers[0])! : node) : null;
+  const add = (parent: string, depth: number, branch: Branch, it: OutlineItem, order: number, side?: Side): string => {
+    const data = { root: map.root.id, parent, order, ...(side ? { side } : {}) };
+    const id = createNode(tx, ea, { depth, branch, text: it.text, data, at, fontFamily, roughness: node.el.roughness });
+    it.children.forEach((c, i) => add(id, depth + 1, branch, c, i));
+    return id;
+  };
+  const first = node.children.length ? Math.max(...node.children.map((c) => c.data.order)) + 1 : 0;
+  return items.map((it, i) => {
+    if (inherited) return add(node.id, node.depth + 1, inherited, it, first + i);
+    const side: Side = right <= count - right ? "R" : "L";
+    if (side === "R") right++;
+    return add(node.id, 1, branchColor(count++), it, first + i, side);
+  });
+}
+
+/** Adds the Markdown outline as subtopics of the node, like XMind's paste; false when there is nothing to add. */
+export async function pasteOutline(view: ExcalidrawView, nodeId: string, md: string): Promise<boolean> {
+  const items = parseOutline(md);
+  if (!items.length) return false;
+  const first = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found) return null;
+    setFolded(tx, found.node, false);
+    const ids = addOutline(tx, ea, found.map, found.node, items);
+    layoutMap(tx, ea, found.map.root.id);
+    return ids[0];
+  });
+  if (first) await focusNode(view, first, false);
+  return true;
+}
+
+/**
+ * Inserts a new map built from the Markdown outline: a single top item becomes the central topic,
+ * several become main topics of a new central topic.
+ */
+export async function newMapFromOutline(view: ExcalidrawView, md: string): Promise<boolean> {
+  const items = parseOutline(md);
+  if (!items.length) return false;
+  const single = items.length === 1;
+  const id = run(view, (tx, ea) => createMap(tx, ea, single ? items[0].text : undefined, single ? items[0].children : items));
+  if (id) await focusNode(view, id, false);
+  return true;
 }
 
 function rootsIn(els: readonly El[]): string[] {

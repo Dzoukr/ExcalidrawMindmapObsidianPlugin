@@ -11,6 +11,8 @@ export interface PanelActions {
   remove(): void;
   nav(dir: Direction): void;
   toggleFold(): void;
+  copy(): void;
+  paste(): void;
   promote(): void;
   demote(): void;
   relayout(): void;
@@ -22,6 +24,7 @@ export interface PanelState {
   node: boolean; // a mind map node is selected or being edited
   root: boolean; // that node is the central topic
   summary: boolean; // that node is a summary topic
+  topics: boolean; // one or more topics are selected, to copy
   siblings: boolean; // the selection is one or more sibling topics that can get a summary or a boundary
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
   foldable: boolean; // that node can be collapsed or expanded
@@ -32,7 +35,7 @@ export interface PanelState {
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 
-type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
+type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "copy" | "paste" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
 
 /** Floating control bar docked at the bottom of an Excalidraw view. */
 export class FloatingPanel {
@@ -63,6 +66,9 @@ export class FloatingPanel {
     button(g2, "boundary", "square-dashed", "Add boundary around the selected topics", a.addBoundary);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
+    const gc = group();
+    button(gc, "copy", "copy", "Copy as Markdown (Ctrl+C)", a.copy);
+    button(gc, "paste", "clipboard-paste", "Paste Markdown as subtopics (Ctrl+V), or as a new map with nothing selected", a.paste);
     const g3 = group();
     button(g3, "left", "arrow-left", "Select left", () => a.nav("left"));
     button(g3, "up", "arrow-up", "Select up", () => a.nav("up"));
@@ -116,6 +122,8 @@ export class FloatingPanel {
     set("edit", s.node || s.boundary);
     set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary);
     set("fold", s.foldable);
+    set("copy", s.topics);
+    set("paste", true);
     set("promote", s.promote);
     set("demote", s.demote);
     const fold = this.buttons.get("fold")!;
