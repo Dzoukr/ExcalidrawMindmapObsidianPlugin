@@ -37,6 +37,12 @@
   padding-left: 4px;
 }
 
+/* Paused: the pause button stays lit so it is obvious how to resume. */
+.mm-panel.mm-paused .mm-btn.is-active {
+  color: var(--text-on-accent);
+  background-color: var(--interactive-accent);
+}
+
 .mm-btn:disabled {
   opacity: 0.35;
   pointer-events: none;

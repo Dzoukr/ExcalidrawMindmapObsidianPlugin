@@ -10,6 +10,7 @@ export interface LNode {
   side: Side | null; // null only for the root
   children: LNode[];
   summaries?: LSummary[];
+  boundaries?: LBoundary[];
 }
 
 /** Summary topic attached to a range of the parent's children, drawn beyond a brace spanning their subtrees. */
@@ -18,12 +19,19 @@ export interface LSummary {
   covers: string[]; // ids of the consecutive children the summary spans
 }
 
+/** Boundary drawn around a range of the parent's children and their subtrees; its id also keys its title size. */
+export interface LBoundary {
+  id: string;
+  covers: string[]; // ids of the consecutive children the boundary encloses
+}
+
 /** Brace box; its tip points away from the summarized topics, toward the summary. */
 export interface Brace extends Box { side: Side; }
 
 export interface Layout {
   boxes: Map<string, Box>;
   braces: Map<string, Brace>; // summary id -> brace
+  boundaries: Map<string, { frame: Box; title: Box }>; // boundary id -> frame and the title tab on its top edge
 }
 
 /** Position info read from the scene, used to detect manual moves since the last layout. */
@@ -43,20 +51,28 @@ export const V_GAP = 12;
 export const BRACE_GAP = 10; // summarized subtrees to brace
 export const BRACE_W = 18; // brace including its tip
 export const SUMMARY_GAP = 12; // brace tip to summary topic
+export const BOUNDARY_PAD = 10; // enclosed subtrees to boundary frame
+export const TITLE_INSET = 14; // frame's left edge to its title tab
+export const TITLE_OVERLAP = 2; // title tab reaching down over the frame's top edge
 const MOVE_EPSILON = 0.5;
 
 const vGap = (depth: number) => (depth <= 1 ? V_GAP_L1 : V_GAP);
+
+/** Index range of the covered ids among kids, when they are all there. */
+function rangeIn(kids: LNode[], covers: string[]): { from: number; to: number } | null {
+  const idx = covers.map((id) => kids.findIndex((k) => k.id === id));
+  if (!idx.length || idx.some((i) => i < 0)) return null;
+  return { from: Math.min(...idx), to: Math.max(...idx) };
+}
 
 /** Children grouped for stacking: a single child, or a run of children spanned by one or more summaries. */
 interface Segment { kids: LNode[]; summaries: LSummary[]; }
 
 function segments(kids: LNode[], summaries: LSummary[] | undefined): Segment[] {
-  const index = new Map(kids.map((k, i) => [k.id, i]));
   const ranges: { from: number; to: number; s: LSummary }[] = [];
   for (const s of summaries ?? []) {
-    const idx = s.covers.map((id) => index.get(id));
-    if (!idx.length || idx.some((i) => i === undefined)) continue;
-    ranges.push({ from: Math.min(...(idx as number[])), to: Math.max(...(idx as number[])), s });
+    const r = rangeIn(kids, s.covers);
+    if (r) ranges.push({ ...r, s });
   }
   ranges.sort((a, b) => a.from - b.from);
   const out: Segment[] = [];
@@ -110,7 +126,8 @@ export function updateOffsets(root: LNode, info: (id: string) => PlacedInfo): Ma
  * Horizontal mind map layout: root centered at rootCenter, level-1 branches on the right or left,
  * each subtree stacked vertically and centered on its parent. Offsets shift a node and its subtree.
  * A summary sits beyond the summarized subtrees, centered on them, and its range gets extra room
- * when the summary's own subtree is taller.
+ * when the summary's own subtree is taller. A boundary frames its subtrees, with room kept above
+ * for its title. Summaries and boundaries take in the ones within their range.
  */
 export function computeLayout(
   root: LNode,
@@ -119,17 +136,35 @@ export function computeLayout(
   rootCenter: Vec,
 ): Layout {
   const subtreeHeight = new Map<string, number>();
-  const stackHeight = (segs: Segment[], depth: number) =>
-    segs.reduce((a, g) => a + segmentHeight(g, depth), 0) + vGap(depth) * (segs.length - 1);
-  const segmentHeight = (g: Segment, depth: number) => {
-    const kids = g.kids.reduce((a, k) => a + subtreeHeight.get(k.id)!, 0) + vGap(depth) * (g.kids.length - 1);
-    return Math.max(kids, ...g.summaries.map((s) => subtreeHeight.get(s.node.id)!));
+
+  // Extra room above the first and below the last child a boundary encloses.
+  type Margins = { top: (id: string) => number; bottom: (id: string) => number };
+  const margins = (owner: LNode, kids: LNode[]): Margins => {
+    const top = new Map<string, number>();
+    const bottom = new Map<string, number>();
+    for (const b of owner.boundaries ?? []) {
+      const r = rangeIn(kids, b.covers);
+      if (!r) continue;
+      const first = kids[r.from].id;
+      const last = kids[r.to].id;
+      top.set(first, (top.get(first) ?? 0) + BOUNDARY_PAD + size(b.id).h - TITLE_OVERLAP);
+      bottom.set(last, (bottom.get(last) ?? 0) + BOUNDARY_PAD);
+    }
+    return { top: (id) => top.get(id) ?? 0, bottom: (id) => bottom.get(id) ?? 0 };
   };
+  const kidsHeight = (kids: LNode[], m: Margins, depth: number) =>
+    kids.reduce((a, k) => a + m.top(k.id) + subtreeHeight.get(k.id)! + m.bottom(k.id), 0) + vGap(depth) * (kids.length - 1);
+  const segmentHeight = (g: Segment, m: Margins, depth: number) =>
+    Math.max(kidsHeight(g.kids, m, depth), ...g.summaries.map((s) => subtreeHeight.get(s.node.id)!));
+  const stackHeight = (segs: Segment[], m: Margins, depth: number) =>
+    segs.reduce((a, g) => a + segmentHeight(g, m, depth), 0) + vGap(depth) * (segs.length - 1);
+
   const measure = (n: LNode, depth: number): number => {
     for (const c of n.children) measure(c, depth + 1);
     for (const s of n.summaries ?? []) measure(s.node, depth + 1);
     const own = size(n.id).h;
-    const h = n.children.length ? Math.max(own, stackHeight(segments(n.children, n.summaries), depth + 1)) : own;
+    const kids = n.children;
+    const h = kids.length ? Math.max(own, stackHeight(segments(kids, n.summaries), margins(n, kids), depth + 1)) : own;
     subtreeHeight.set(n.id, h);
     return h;
   };
@@ -138,6 +173,8 @@ export function computeLayout(
 
   const boxes = new Map<string, Box>();
   const braces = new Map<string, Brace>();
+  const boundaries = new Map<string, { frame: Box; title: Box }>();
+  const decorations = new Map<string, Box[]>(); // summary or boundary id -> everything it draws
   const rs = size(root.id);
   const rootBox = { x: rootCenter.x - rs.w / 2, y: rootCenter.y - rs.h / 2, w: rs.w, h: rs.h };
   boxes.set(root.id, rootBox);
@@ -145,53 +182,86 @@ export function computeLayout(
   const subtreeBoxes = (n: LNode): Box[] => [
     boxes.get(n.id)!,
     ...n.children.flatMap(subtreeBoxes),
-    ...(n.summaries ?? []).flatMap((s) => subtreeBoxes(s.node)),
+    ...(n.summaries ?? []).flatMap((s) => decorations.get(s.node.id) ?? []),
+    ...(n.boundaries ?? []).flatMap((b) => decorations.get(b.id) ?? []),
   ];
+  const bounds = (bs: Box[]): Box => {
+    const x = Math.min(...bs.map((b) => b.x));
+    const y = Math.min(...bs.map((b) => b.y));
+    return { x, y, w: Math.max(...bs.map((b) => b.x + b.w)) - x, h: Math.max(...bs.map((b) => b.y + b.h)) - y };
+  };
 
-  const placeSummary = (s: LSummary, kids: LNode[], side: Side, depth: number) => {
-    const covered = kids.filter((k) => s.covers.includes(k.id)).flatMap(subtreeBoxes);
-    const top = Math.min(...covered.map((b) => b.y));
-    const bottom = Math.max(...covered.map((b) => b.y + b.h));
+  const placeSummary = (s: LSummary, covered: Box[], side: Side, depth: number) => {
+    const c = bounds(covered);
     const brace: Brace =
       side === "R"
-        ? { x: Math.max(...covered.map((b) => b.x + b.w)) + BRACE_GAP, y: top, w: BRACE_W, h: bottom - top, side }
-        : { x: Math.min(...covered.map((b) => b.x)) - BRACE_GAP - BRACE_W, y: top, w: BRACE_W, h: bottom - top, side };
+        ? { x: c.x + c.w + BRACE_GAP, y: c.y, w: BRACE_W, h: c.h, side }
+        : { x: c.x - BRACE_GAP - BRACE_W, y: c.y, w: BRACE_W, h: c.h, side };
     braces.set(s.node.id, brace);
     const sz = size(s.node.id);
     const o = offset(s.node.id);
     const x = side === "R" ? brace.x + brace.w + SUMMARY_GAP : brace.x - SUMMARY_GAP - sz.w;
-    const box = { x: x + o.x, y: (top + bottom) / 2 - sz.h / 2 + o.y, w: sz.w, h: sz.h };
+    const box = { x: x + o.x, y: c.y + c.h / 2 - sz.h / 2 + o.y, w: sz.w, h: sz.h };
     boxes.set(s.node.id, box);
-    place(box, s.node.children, s.node.summaries, side, depth + 1);
+    place(box, s.node, s.node.children, side, depth + 1);
+    decorations.set(s.node.id, [brace, ...subtreeBoxes(s.node)]);
   };
 
-  const place = (parent: Box, kids: LNode[], summaries: LSummary[] | undefined, side: Side, depth: number) => {
+  const placeBoundary = (b: LBoundary, covered: Box[]) => {
+    const c = bounds(covered);
+    const frame = { x: c.x - BOUNDARY_PAD, y: c.y - BOUNDARY_PAD, w: c.w + 2 * BOUNDARY_PAD, h: c.h + 2 * BOUNDARY_PAD };
+    const t = size(b.id);
+    const title = { x: frame.x + TITLE_INSET, y: frame.y - t.h + TITLE_OVERLAP, w: t.w, h: t.h };
+    boundaries.set(b.id, { frame, title });
+    decorations.set(b.id, [frame, title]);
+  };
+
+  const place = (parent: Box, owner: LNode, kids: LNode[], side: Side, depth: number) => {
     if (!kids.length) return;
     const gap = vGap(depth);
-    const segs = segments(kids, summaries);
-    let top = parent.y + parent.h / 2 - stackHeight(segs, depth) / 2;
+    const m = margins(owner, kids);
+    const segs = segments(kids, owner.summaries);
+    let top = parent.y + parent.h / 2 - stackHeight(segs, m, depth) / 2;
     const hGap = depth === 1 ? ROOT_H_GAP : H_GAP;
     for (const g of segs) {
-      const gh = segmentHeight(g, depth);
-      const inner = g.kids.reduce((a, k) => a + subtreeHeight.get(k.id)!, 0) + gap * (g.kids.length - 1);
-      let t = top + (gh - inner) / 2;
+      const gh = segmentHeight(g, m, depth);
+      let t = top + (gh - kidsHeight(g.kids, m, depth)) / 2;
       for (const k of g.kids) {
+        t += m.top(k.id);
         const s = size(k.id);
         const sh = subtreeHeight.get(k.id)!;
         const o = offset(k.id);
         const x = side === "R" ? parent.x + parent.w + hGap : parent.x - hGap - s.w;
         const box = { x: x + o.x, y: t + sh / 2 - s.h / 2 + o.y, w: s.w, h: s.h };
         boxes.set(k.id, box);
-        place(box, k.children, k.summaries, side, depth + 1);
-        t += sh + gap;
+        place(box, k, k.children, side, depth + 1);
+        t += sh + m.bottom(k.id) + gap;
       }
-      for (const s of g.summaries) placeSummary(s, g.kids, side, depth);
       top += gh + gap;
     }
+
+    // Summaries and boundaries of this level, narrowest first, so each takes in those within its range.
+    const fits = (covers: string[]) => !!rangeIn(kids, covers);
+    type Deco = { id: string; covers: string[]; summary?: LSummary; boundary?: LBoundary };
+    const decos: Deco[] = [
+      ...(owner.boundaries ?? []).filter((b) => fits(b.covers)).map((b) => ({ id: b.id, covers: b.covers, boundary: b })),
+      ...(owner.summaries ?? []).filter((s) => fits(s.covers)).map((s) => ({ id: s.node.id, covers: s.covers, summary: s })),
+    ];
+    decos.sort((a, b) => a.covers.length - b.covers.length || (a.boundary ? 0 : 1) - (b.boundary ? 0 : 1));
+    const done: Deco[] = [];
+    for (const d of decos) {
+      const covered = [
+        ...kids.filter((k) => d.covers.includes(k.id)).flatMap(subtreeBoxes),
+        ...done.filter((x) => x.covers.every((id) => d.covers.includes(id))).flatMap((x) => decorations.get(x.id)!),
+      ];
+      if (d.summary) placeSummary(d.summary, covered, side, depth);
+      else placeBoundary(d.boundary!, covered);
+      done.push(d);
+    }
   };
-  place(rootBox, root.children.filter((c) => c.side !== "L"), root.summaries, "R", 1);
-  place(rootBox, root.children.filter((c) => c.side === "L"), root.summaries, "L", 1);
-  return { boxes, braces };
+  place(rootBox, root, root.children.filter((c) => c.side !== "L"), "R", 1);
+  place(rootBox, root, root.children.filter((c) => c.side === "L"), "L", 1);
+  return { boxes, braces, boundaries };
 }
 
 /** Points of a brace polyline relative to its box, meant to be drawn as a smoothed line. */

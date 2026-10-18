@@ -1,10 +1,13 @@
 import { Notice } from "obsidian";
 import { El, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import { Box, Brace, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, updateOffsets } from "./layout";
-import { KEY, MMNode, MindMap, NodeData, buildMap, edgeData, nodeData, resolveNodeElement, subtree } from "./model";
 import {
-  Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING, SUMMARY_TEXT, branchColor, connectorArrowhead, paddingFor,
-  styleFor, summaryStyle,
+  KEY, MMBoundary, MMNode, MindMap, NodeData, boundTextId, boundaryData, buildMap, edgeData, nodeData, resolveNodeElement,
+  rootIdOf, subtree, titleData,
+} from "./model";
+import {
+  BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING, SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING,
+  boundaryColors, branchColor, connectorArrowhead, paddingFor, styleFor, summaryStyle,
 } from "./styles";
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -43,6 +46,30 @@ export function selectedNodes(view: ExcalidrawView): El[] {
 export function selectedNode(view: ExcalidrawView): El | null {
   const nodes = selectedNodes(view);
   return nodes.length === 1 ? nodes[0] : null;
+}
+
+/** The boundary whose frame or title (alone) is selected, if any. */
+export function selectedBoundary(view: ExcalidrawView): string | null {
+  const api = view.excalidrawAPI;
+  if (!api) return null;
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const byId = new Map(api.getSceneElements().map((e) => [e.id, e]));
+  const found = new Set<string>();
+  for (const id of Object.keys(sel).filter((k) => sel[k])) {
+    let el = byId.get(id);
+    if (el?.type === "text" && el.containerId) el = byId.get(el.containerId);
+    const b = boundaryData(el) ? el!.id : titleData(el)?.boundary;
+    if (!b) return null;
+    found.add(b);
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
+/** Whether a boundary title is being edited. */
+export function editingTitle(view: ExcalidrawView): boolean {
+  const api = view.excalidrawAPI;
+  const cid = api?.getAppState().editingTextElement?.containerId;
+  return !!cid && !!titleData(api!.getSceneElements().find((e) => e.id === cid));
 }
 
 /** The mind map node whose text is being edited, if any. */
@@ -221,20 +248,89 @@ function createBrace(tx: SceneTx, ea: any, rootId: string, summary: MMNode, b: B
   ea.clear();
 }
 
+/** Title tab of a boundary: a container with bound text, not yet added to the scene. */
+function createTitle(ea: any, rootId: string, boundaryId: string, at: Vec, roughness: number, fontFamily: number): El[] {
+  const c = boundaryColors();
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: c.title,
+    backgroundColor: c.titleFill,
+    fillStyle: "solid",
+    strokeWidth: 1,
+    strokeStyle: "solid",
+    roughness,
+    roundness: { type: 3 },
+    opacity: 100,
+    angle: 0,
+    fontFamily,
+    fontSize: TITLE_FONT_SIZE,
+    textAlign: "center",
+    verticalAlign: "middle",
+  });
+  const id: string = ea.addText(at.x, at.y, BOUNDARY_TEXT, {
+    box: true,
+    boxPadding: TITLE_PADDING.padX,
+    boxStrokeColor: c.titleFill,
+    textAlign: "center",
+    textVerticalAlign: "middle",
+  });
+  const els = ea.getElements() as El[];
+  for (const el of els) if (el.id === id) el.customData = { [KEY]: { boundaryTitle: true, self: id, root: rootId, boundary: boundaryId } };
+  // Container before its text.
+  els.sort((a, b) => (a.type === "text" ? 1 : 0) - (b.type === "text" ? 1 : 0));
+  ea.clear();
+  return els;
+}
+
+/** Boundary frame with its title, not yet added to the scene. */
+function createBoundary(ea: any, rootId: string, parent: MMNode, covers: MMNode[]): El[] {
+  const c = boundaryColors();
+  const first = covers[0];
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: c.line,
+    backgroundColor: c.fill,
+    fillStyle: "solid",
+    strokeWidth: 2,
+    strokeStyle: "dashed",
+    roughness: first.el.roughness,
+    roundness: { type: 3 },
+    opacity: 100,
+    angle: 0,
+  });
+  const id: string = ea.addRect(first.el.x, first.el.y, first.el.width, first.el.height);
+  const frame: El = ea.getElement(id);
+  frame.customData = { [KEY]: { boundary: true, self: id, root: rootId, parent: parent.id, topics: covers.map((n) => n.id) } };
+  ea.clear();
+  const font = first.text?.fontFamily ?? 1;
+  return [frame, ...createTitle(ea, rootId, id, { x: first.el.x, y: first.el.y - 30 }, first.el.roughness, font)];
+}
+
+/** Deletes the element with any text bound to it. */
+function deleteWithText(tx: SceneTx, el: El) {
+  tx.delete(el.id);
+  const tid = boundTextId(el);
+  if (tid) tx.delete(tid);
+}
+
+function deleteBoundaryEls(tx: SceneTx, b: MMBoundary) {
+  deleteWithText(tx, b.el);
+  if (b.title) deleteWithText(tx, b.title);
+}
+
 // ---------- layout ----------
 
 interface NodeSize { w: number; h: number; tw: number; th: number; }
 
 const padOf = (n: MMNode) => (n.data.summary ? SUMMARY_PADDING : paddingFor(n.depth));
 
-function measureNode(ea: any, n: MMNode): NodeSize {
-  const pad = padOf(n);
+function measureBox(ea: any, text: El | null, pad: { padX: number; padY: number }): NodeSize {
   let tw = MIN_TEXT_WIDTH;
   let th = 20;
-  if (n.text) {
-    ea.style.fontFamily = n.text.fontFamily;
-    ea.style.fontSize = n.text.fontSize;
-    const raw: string = n.text.originalText ?? n.text.text ?? "";
+  if (text) {
+    ea.style.fontFamily = text.fontFamily;
+    ea.style.fontSize = text.fontSize;
+    const raw: string = text.originalText ?? text.text ?? "";
     const m = ea.measureText(raw.length ? raw : " ");
     tw = Math.max(MIN_TEXT_WIDTH, Math.ceil(m.width));
     th = Math.ceil(m.height);
@@ -254,6 +350,17 @@ function textPosition(text: El, box: Box, s: NodeSize, pad: { padX: number; padY
   return { x, y };
 }
 
+/** Moves and sizes a container and its bound text to the box. */
+function placeBox(tx: SceneTx, el: El, text: El | null, b: Box, s: NodeSize, pad: { padX: number; padY: number }, patch: Partial<El> = {}) {
+  const geomChanged = !near(el.x, b.x) || !near(el.y, b.y) || !near(el.width, b.w) || !near(el.height, b.h);
+  if (geomChanged || Object.keys(patch).length) tx.patch(el.id, { x: b.x, y: b.y, width: b.w, height: b.h, ...patch });
+  if (!text) return;
+  const p = textPosition(text, b, s, pad);
+  const raw = text.originalText ?? text.text;
+  if (!near(text.x, p.x) || !near(text.y, p.y) || !near(text.width, s.tw) || !near(text.height, s.th) || text.text !== raw)
+    tx.patch(text.id, { x: p.x, y: p.y, width: s.tw, height: s.th, text: raw });
+}
+
 const sameData = (a: NodeData, b: NodeData) =>
   a.parent === b.parent && a.side === b.side && a.order === b.order &&
   near(a.lx, b.lx!) && near(a.ly, b.ly!) && near(a.ox ?? 0, b.ox!) && near(a.oy ?? 0, b.oy!);
@@ -263,15 +370,25 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
   const map = buildMap(tx.live(), rootId);
   if (!map) return null;
 
+  // A boundary whose title was deleted by hand gets a new one, right above its frame.
+  for (const b of map.boundaries.values()) {
+    if (b.title) continue;
+    const first = map.nodes.get(b.covers[0])!;
+    const els = createTitle(ea, rootId, b.id, { x: b.el.x, y: b.el.y - 30 }, b.el.roughness, first.text?.fontFamily ?? 1);
+    tx.insert(els, tx.indexOf(b.id) + 1);
+    [b.title, b.titleText] = els;
+  }
+
   const sizes = new Map<string, NodeSize>();
-  for (const n of map.nodes.values()) sizes.set(n.id, measureNode(ea, n));
+  for (const n of map.nodes.values()) sizes.set(n.id, measureBox(ea, n.text, padOf(n)));
+  for (const b of map.boundaries.values()) sizes.set(b.id, measureBox(ea, b.titleText, TITLE_PADDING));
 
   const offsets = updateOffsets(map.root, (id) => {
     const n = map.nodes.get(id)!;
     return { x: n.el.x, y: n.el.y, lx: n.data.lx, ly: n.data.ly, ox: n.data.ox ?? 0, oy: n.data.oy ?? 0 };
   });
   const r = map.root.el;
-  const { boxes, braces } = computeLayout(
+  const { boxes, braces, boundaries } = computeLayout(
     map.root,
     (id) => sizes.get(id)!,
     (id) => offsets.get(id) ?? { x: 0, y: 0 },
@@ -284,17 +401,15 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
     const o = offsets.get(n.id) ?? { x: 0, y: 0 };
     const data: NodeData = { ...n.data, parent: n.parent?.id ?? null, lx: b.x, ly: b.y, ox: o.x, oy: o.y };
     if (n.depth === 1) data.side = n.side!;
-    const geomChanged = !near(n.el.x, b.x) || !near(n.el.y, b.y) || !near(n.el.width, b.w) || !near(n.el.height, b.h);
-    if (geomChanged || !sameData(n.data, data))
-      tx.patch(n.id, { x: b.x, y: b.y, width: b.w, height: b.h, customData: { ...n.el.customData, [KEY]: data } });
-    if (n.text) {
-      const p = textPosition(n.text, b, s, padOf(n));
-      const raw = n.text.originalText ?? n.text.text;
-      const t = n.text;
-      if (!near(t.x, p.x) || !near(t.y, p.y) || !near(t.width, s.tw) || !near(t.height, s.th) || t.text !== raw)
-        tx.patch(t.id, { x: p.x, y: p.y, width: s.tw, height: s.th, text: raw });
-    }
+    placeBox(tx, n.el, n.text, b, s, padOf(n), sameData(n.data, data) ? {} : { customData: { ...n.el.customData, [KEY]: data } });
   }
+
+  for (const [id, { frame, title }] of boundaries) {
+    const b = map.boundaries.get(id)!;
+    placeBox(tx, b.el, null, frame, sizes.get(id)!, TITLE_PADDING);
+    placeBox(tx, b.title!, b.titleText, title, sizes.get(id)!, TITLE_PADDING);
+  }
+  for (const el of map.strayBoundaries) deleteWithText(tx, el);
 
   for (const n of map.nodes.values()) {
     if (!n.parent || n.covers) continue;
@@ -452,6 +567,10 @@ export async function addSibling(view: ExcalidrawView, nodeId: string, above: bo
       if (!s.covers.includes(node.id)) continue;
       tx.patch(s.node.id, { customData: { ...s.node.el.customData, [KEY]: { ...s.node.data, summary: [...s.covers, id] } } });
     }
+    for (const b of parent.boundaries) {
+      if (!b.covers.includes(node.id)) continue;
+      tx.patch(b.id, { customData: { ...b.el.customData, [KEY]: { ...boundaryData(b.el)!, topics: [...b.covers, id] } } });
+    }
     layoutMap(tx, ea, map.root.id);
     return id;
   });
@@ -466,6 +585,7 @@ function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
     if (edge) removeEdge(tx, edge);
     const brace = map.braces.get(x.id);
     if (brace) tx.delete(brace.id);
+    for (const b of x.boundaries) deleteBoundaryEls(tx, b);
     // Unbind other arrows that pointed at the deleted node.
     for (const b of x.el.boundElements ?? []) {
       const a = tx.get(b.id);
@@ -492,6 +612,7 @@ export async function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot
       deleteSubtree(tx, map, node);
       for (const e of map.strayEdges) removeEdge(tx, e);
       for (const e of map.strayBraces) tx.delete(e.id);
+      for (const e of map.strayBoundaries) deleteWithText(tx, e);
       tx.api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
       return null;
     }
@@ -509,6 +630,7 @@ export async function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot
     // Like XMind, a summary goes once nothing is left for it to span.
     for (const s of parent.summaries)
       if (s.node !== node && s.covers.every((id) => gone.has(id))) deleteSubtree(tx, map, s.node);
+    for (const b of parent.boundaries) if (b.covers.every((id) => gone.has(id))) deleteBoundaryEls(tx, b);
     layoutMap(tx, ea, map.root.id);
     return next.id;
   });
@@ -536,8 +658,11 @@ export async function moveNode(view: ExcalidrawView, nodeId: string, up: boolean
   if (moved) await focusNode(view, nodeId, false);
 }
 
-/** Whether the nodes can get a summary: one or more siblings on the same side, not the central topic or a summary. */
-export function canSummarize(nodes: El[]): boolean {
+/**
+ * Whether the nodes can get a summary or a boundary: one or more siblings on the same side,
+ * not the central topic or a summary.
+ */
+export function areSiblingTopics(nodes: El[]): boolean {
   const ds = nodes.map(nodeData);
   const first = ds[0];
   if (!first || ds.some((d) => !d || d.parent === null || d.summary)) return false;
@@ -578,6 +703,69 @@ export async function addSummary(view: ExcalidrawView, nodeIds: string[]) {
     return id;
   });
   if (id) await focusNode(view, id, true);
+}
+
+/** Puts a boundary around the given sibling topics and everything between them, like XMind's Boundary. */
+export async function addBoundary(view: ExcalidrawView, nodeIds: string[]) {
+  const title = run(view, (tx, ea) => {
+    const found = nodeIds.length ? mapOf(tx, nodeIds[0]) : null;
+    if (!found) return null;
+    const { map, node: first } = found;
+    const parent = first.parent;
+    const nodes = nodeIds.map((id) => map.nodes.get(id));
+    if (!parent || nodes.some((n) => !n || n.parent !== parent || n.covers || n.side !== first.side)) {
+      new Notice("Select one or more sibling topics to put a boundary around.");
+      return null;
+    }
+    const sibs = parent.children.filter((c) => c.side === first.side);
+    const idx = nodes.map((n) => sibs.indexOf(n!));
+    const covered = sibs.slice(Math.min(...idx), Math.max(...idx) + 1);
+    const ids = covered.map((c) => c.id);
+    for (const b of parent.boundaries) {
+      const inside = b.covers.every((id) => ids.includes(id));
+      const around = ids.every((id) => b.covers.includes(id));
+      if (inside && around) return void new Notice("These topics already have a boundary.");
+      if (!inside && !around && b.covers.some((id) => ids.includes(id)))
+        return void new Notice("A boundary can't partly overlap another one.");
+    }
+
+    // Behind the map, but in front of the boundaries around this one and behind those inside it.
+    const enclosed = new Set(covered.flatMap((c) => subtree(c).map((n) => n.id)));
+    const below = [
+      ...[...map.nodes.values()].flatMap((n) => [n.el, n.text]),
+      ...map.edges.values(),
+      ...map.braces.values(),
+      ...[...map.boundaries.values()].filter((b) => b.covers.every((id) => enclosed.has(id))).flatMap((b) => [b.el, b.title]),
+    ];
+    const indexes = below.map((el) => (el ? tx.indexOf(el.id) : -1)).filter((i) => i >= 0);
+    const els = createBoundary(ea, map.root.id, parent, covered);
+    if (indexes.length) tx.insert(els, Math.min(...indexes));
+    else els.forEach((el) => tx.add(el));
+    layoutMap(tx, ea, map.root.id);
+    return els[1].id;
+  });
+  if (title) await focusNode(view, title, true);
+}
+
+/** Deletes a boundary with its title; the topics it enclosed stay. */
+export async function deleteBoundary(view: ExcalidrawView, boundaryId: string) {
+  const next = run(view, (tx, ea) => {
+    const root = rootIdOf(tx.get(boundaryId));
+    const b = root ? buildMap(tx.live(), root)?.boundaries.get(boundaryId) : undefined;
+    if (!root || !b) return null;
+    deleteBoundaryEls(tx, b);
+    layoutMap(tx, ea, root);
+    return b.covers[0];
+  });
+  if (next) await focusNode(view, next, false);
+}
+
+export async function editBoundaryTitle(view: ExcalidrawView, boundaryId: string) {
+  const title = view.excalidrawAPI?.getSceneElements().find((e) => titleData(e)?.boundary === boundaryId);
+  if (!title) return;
+  select(view, title.id);
+  await nextFrame();
+  await startEditing(view, true);
 }
 
 export async function editNode(view: ExcalidrawView, nodeId: string) {
@@ -627,8 +815,8 @@ function rootsIn(els: readonly El[]): string[] {
 /** Re-layouts the map of the given node, or every map in the drawing. */
 export function relayout(view: ExcalidrawView, nodeId?: string) {
   run(view, (tx, ea) => {
-    const d = nodeId ? nodeData(tx.get(nodeId)) : null;
-    for (const root of d ? [d.root] : rootsIn(tx.live())) layoutMap(tx, ea, root);
+    const r = nodeId ? rootIdOf(tx.get(nodeId)) : null;
+    for (const root of r ? [r] : rootsIn(tx.live())) layoutMap(tx, ea, root);
   });
 }
 

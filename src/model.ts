@@ -1,5 +1,5 @@
-import { El } from "./excalidraw";
-import { LNode, Side } from "./layout";
+import type { El } from "./excalidraw";
+import type { LBoundary, LNode, Side } from "./layout";
 
 // Mind map structure is stored in element customData under this key.
 export const KEY = "mindmap";
@@ -24,6 +24,28 @@ export interface EdgeData {
   child: string;
 }
 
+export interface BoundaryData {
+  boundary: true;
+  self: string;
+  root: string;
+  parent: string;
+  topics: string[]; // the range runs from the first to the last still present among the parent's children
+}
+
+export interface TitleData {
+  boundaryTitle: true;
+  self: string;
+  root: string;
+  boundary: string;
+}
+
+export interface MMBoundary extends LBoundary {
+  el: El;
+  parent: MMNode;
+  title: El | null; // container of the title text
+  titleText: El | null;
+}
+
 export interface BraceData {
   brace: true;
   root: string;
@@ -42,6 +64,7 @@ export interface MMNode extends LNode {
   parent: MMNode | null;
   children: MMNode[];
   summaries: MMSummary[];
+  boundaries: MMBoundary[];
   covers: string[] | null; // set on summary topics: the siblings they span
   depth: number;
 }
@@ -53,17 +76,34 @@ export interface MindMap {
   strayEdges: El[];
   braces: Map<string, El>; // summary id -> brace
   strayBraces: El[];
+  boundaries: Map<string, MMBoundary>;
+  strayBoundaries: El[]; // frames and titles left without a boundary to belong to
 }
 
 export function nodeData(el: El | undefined | null): NodeData | null {
   const d = el?.customData?.[KEY];
-  if (!d || d.edge || d.self !== el!.id) return null;
+  if (!d || d.edge || d.boundary || d.boundaryTitle || d.self !== el!.id) return null;
   return d as NodeData;
 }
 
 export function edgeData(el: El | undefined | null): EdgeData | null {
   const d = el?.customData?.[KEY];
   return d?.edge ? (d as EdgeData) : null;
+}
+
+export function boundaryData(el: El | undefined | null): BoundaryData | null {
+  const d = el?.customData?.[KEY];
+  return d?.boundary === true && d.self === el!.id ? (d as BoundaryData) : null; // a title's `boundary` is its frame id
+}
+
+export function titleData(el: El | undefined | null): TitleData | null {
+  const d = el?.customData?.[KEY];
+  return d?.boundaryTitle && d.self === el!.id ? (d as TitleData) : null;
+}
+
+/** Root id of the map a node, boundary frame or boundary title belongs to. */
+export function rootIdOf(el: El | undefined | null): string | null {
+  return nodeData(el)?.root ?? boundaryData(el)?.root ?? titleData(el)?.root ?? null;
 }
 
 export function braceData(el: El | undefined | null): BraceData | null {
@@ -98,7 +138,7 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     const text = tid ? byId.get(tid) : undefined;
     nodes.set(el.id, {
       id: el.id, el, data, text: text && !text.isDeleted ? text : null,
-      parent: null, children: [], summaries: [], covers: null, depth: 0, side: null,
+      parent: null, children: [], summaries: [], boundaries: [], covers: null, depth: 0, side: null,
     });
   }
   const root = nodes.get(rootId)!;
@@ -176,7 +216,44 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     if (nodes.get(d.summary)?.covers && !braces.has(d.summary)) braces.set(d.summary, el);
     else strayBraces.push(el);
   }
-  return { root, nodes, edges, strayEdges, braces, strayBraces };
+
+  // A boundary encloses its parent's children (on one side) from the first to the last it lists that still exist.
+  const boundaries = new Map<string, MMBoundary>();
+  const strayBoundaries: El[] = [];
+  for (const el of elements) {
+    if (el.isDeleted) continue;
+    const d = boundaryData(el);
+    if (!d || d.root !== rootId) continue;
+    const p = nodes.get(d.parent);
+    const listed = p ? p.children.filter((c) => d.topics.includes(c.id)) : [];
+    if (!p || !listed.length) {
+      strayBoundaries.push(el);
+      continue;
+    }
+    const sibs = p.children.filter((c) => c.side === listed[0].side);
+    const idx = listed.map((c) => sibs.indexOf(c)).filter((i) => i >= 0);
+    const b: MMBoundary = {
+      id: el.id, el, parent: p, title: null, titleText: null,
+      covers: sibs.slice(Math.min(...idx), Math.max(...idx) + 1).map((c) => c.id),
+    };
+    boundaries.set(el.id, b);
+    p.boundaries.push(b);
+  }
+  for (const el of elements) {
+    if (el.isDeleted) continue;
+    const d = titleData(el);
+    if (!d || d.root !== rootId) continue;
+    const b = boundaries.get(d.boundary);
+    if (!b || b.title) {
+      strayBoundaries.push(el);
+      continue;
+    }
+    const tid = boundTextId(el);
+    const text = tid ? byId.get(tid) : undefined;
+    b.title = el;
+    b.titleText = text && !text.isDeleted ? text : null;
+  }
+  return { root, nodes, edges, strayEdges, braces, strayBraces, boundaries, strayBoundaries };
 }
 
 /** The node with its children and summaries, recursively. */

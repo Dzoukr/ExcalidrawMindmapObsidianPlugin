@@ -86,6 +86,17 @@ export class SceneTx {
     this.added.push(el.id);
   }
 
+  /** Position in the z-order, -1 for elements added in this transaction. */
+  indexOf(id: string): number {
+    return this.order.indexOf(id);
+  }
+
+  /** Adds elements at the given z-order position instead of on top. */
+  insert(els: El[], index: number) {
+    for (const el of els) this.cur.set(el.id, el);
+    this.order.splice(index, 0, ...els.map((e) => e.id));
+  }
+
   delete(id: string) {
     if (this.cur.has(id)) this.patch(id, { isDeleted: true });
   }

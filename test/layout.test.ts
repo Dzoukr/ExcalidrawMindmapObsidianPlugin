@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LNode, PlacedInfo } from "../src/layout.ts";
-import { BRACE_GAP, BRACE_W, ROOT_H_GAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, findFreeSpot, updateOffsets } from "../src/layout.ts";
+import { BOUNDARY_PAD, BRACE_GAP, BRACE_W, ROOT_H_GAP, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, findFreeSpot, updateOffsets } from "../src/layout.ts";
 
 const node = (id: string, side: "R" | "L" | null, children: LNode[] = []): LNode => ({ id, side, children });
 const size = () => ({ w: 100, h: 40 });
@@ -64,6 +64,33 @@ test("left summary mirrors and a taller summary subtree spreads the siblings", (
   const slot = 3 * 40 + 2 * V_GAP;
   assert.equal(l1.y + l1.h / 2, b.get("s2")!.y + 20);
   assert.equal(b.get("l2")!.y, l1.y + l1.h / 2 + slot / 2 + V_GAP);
+});
+
+test("boundary frames the covered subtrees with its title on top and pushes siblings apart", () => {
+  const a = node("a", "R", [node("a1", "R", [node("a1x", "R")]), node("a2", "R"), node("a3", "R")]);
+  a.boundaries = [{ id: "b", covers: ["a1", "a2"] }];
+  const sz = (id: string) => (id === "b" ? { w: 60, h: 24 } : { w: 100, h: 40 });
+  const { boxes: x, boundaries } = computeLayout(node("r", null, [a]), sz, zero, { x: 0, y: 0 });
+  const { frame, title } = boundaries.get("b")!;
+  const a1 = x.get("a1")!, a2 = x.get("a2")!, a1x = x.get("a1x")!;
+  assert.equal(frame.x, a1.x - BOUNDARY_PAD);
+  assert.equal(frame.x + frame.w, a1x.x + a1x.w + BOUNDARY_PAD);
+  assert.equal(frame.y, a1.y - BOUNDARY_PAD);
+  assert.equal(frame.y + frame.h, a2.y + a2.h + BOUNDARY_PAD);
+  assert.deepEqual(title, { x: frame.x + TITLE_INSET, y: frame.y - 24 + TITLE_OVERLAP, w: 60, h: 24 });
+  assert.equal(x.get("a3")!.y - (frame.y + frame.h), V_GAP);
+  // The covered range stays centered on the parent together with the room kept for the frame.
+  const top = title.y, bottom = x.get("a3")!.y + 40;
+  assert.equal((top + bottom) / 2, x.get("a")!.y + 20);
+});
+
+test("summary brace goes beyond a boundary on the same topics", () => {
+  const a = node("a", "R", [node("a1", "R"), node("a2", "R")]);
+  a.boundaries = [{ id: "b", covers: ["a1", "a2"] }];
+  a.summaries = [{ node: node("s", "R"), covers: ["a1", "a2"] }];
+  const { boundaries, braces } = computeLayout(node("r", null, [a]), size, zero, { x: 0, y: 0 });
+  const { frame } = boundaries.get("b")!;
+  assert.equal(braces.get("s")!.x, frame.x + frame.w + BRACE_GAP);
 });
 
 test("manual moves become offsets, moving with the parent does not", () => {

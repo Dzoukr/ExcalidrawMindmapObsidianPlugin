@@ -17,6 +17,7 @@ export interface Colors {
   central: { text: string; border: string; fill: string };
   topicText: string; // text of main topics and subtopics
   summary: { text: string; border: string; fill: string }; // border also colors the brace
+  boundary: { line: string; fill: string; title: string; titleFill: string };
   branches: Branch[]; // cycled through for the main topics of a map
 }
 
@@ -24,6 +25,7 @@ export const DEFAULT_COLORS: Colors = {
   central: { text: "#ffffff", border: "#1e1e1e", fill: "#1e1e1e" },
   topicText: "#1e1e1e",
   summary: { text: "#1e1e1e", border: "#1e1e1e", fill: "#ffffff" },
+  boundary: { line: "#868e96", fill: "#e9ecef", title: "#1e1e1e", titleFill: "#adb5bd" },
   branches: [
     { stroke: "#e03131", fill: "#ffc9c9" },
     { stroke: "#1971c2", fill: "#a5d8ff" },
@@ -58,6 +60,7 @@ export function branchColor(i: number): Branch {
 
 export const DEFAULT_TEXT = ["Central Topic", "Main Topic", "Subtopic"];
 export const SUMMARY_TEXT = "Summary";
+export const BOUNDARY_TEXT = "Boundary";
 export const MIN_TEXT_WIDTH = 24;
 
 export function paddingFor(depth: number): { padX: number; padY: number } {
@@ -76,6 +79,12 @@ export function styleFor(depth: number, branch: Branch): NodeStyle {
 }
 
 export const SUMMARY_PADDING = { padX: 16, padY: 8 };
+export const TITLE_PADDING = { padX: 12, padY: 4 };
+export const TITLE_FONT_SIZE = 16;
+
+export function boundaryColors() {
+  return colors.boundary;
+}
 
 /** Summary topics use their own colors, whatever the branch. */
 export function summaryStyle(): NodeStyle {

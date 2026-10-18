@@ -18,13 +18,17 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 
 **Add summary** in the panel (or the command "Add summary to selected topics") works like XMind's Summary: select one or more sibling topics and it adds a summary topic behind a brace spanning them, and any topics between them. A summary can have its own subtopics. A sibling added to a summarized topic (Enter / Shift+Enter) joins the summary, while a topic added to the parent (Tab / Insert) stays outside it. Deleting all the topics it spans deletes the summary too.
 
+**Add boundary** (or the command "Add boundary around selected topics") draws a dashed frame with a title tab around the selected sibling topics, any topics between them, and their subtopics, like XMind's Boundary. The title is edited right away. Select the frame or its title to edit the title (Space / F2) or delete the boundary (Delete), which keeps the topics. Siblings added with Enter join the boundary, and boundaries can be nested.
+
+The last button in the panel (or the command "Pause or resume mind map editing") pauses the plugin: its keys are left to Excalidraw, text edits no longer re-run the layout, and the other buttons are disabled until you resume. A restart resumes it too.
+
 While editing text: Enter commits, Shift+Enter adds a line break, Tab/Insert commits and adds a child.
 
 Layout runs automatically after every change. Nodes can be dragged freely. The offset is remembered, and the node's subtree follows it. The layout button in the panel offers two modes. **Refresh layout** re-runs the layout and keeps those moves, which is useful after editing with plain Excalidraw tools (dragging a branch, changing a font size, deleting a connector). **Reset layout** discards the moves and puts topics back to their automatic positions, for the selected subtree or for all maps when nothing is selected.
 
 Every operation is a single undo step.
 
-Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), and the branch colors that main topics take in turn. Changes apply to topics created afterwards. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards.
+Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), boundaries (line, background, title text, title background), and the branch colors that main topics take in turn. Changes apply to topics created afterwards. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards.
 
 ## Data model
 
@@ -32,6 +36,7 @@ Colors are set in the plugin settings: the central topic (text, border, backgrou
 - Summary: a node whose `parent` is the parent of the topics it spans, with `summary` listing their ids. The range runs from the first to the last still present.
 - Connector: arrow bound to both nodes, `customData.mindmap = { edge, root, parent, child }`.
 - Brace: line next to the summarized topics, `customData.mindmap = { brace, root, summary }`.
+- Boundary: dashed rectangle behind the map, `customData.mindmap = { boundary, self, root, parent, topics }`, and its title, a rectangle with bound text, `customData.mindmap = { boundaryTitle, self, root, boundary }`.
 - Copies of nodes (paste, Alt-drag) are ignored by the mind map, because `self` no longer matches the element id.
 
 ## Development

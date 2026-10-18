@@ -1,10 +1,11 @@
 import { App, ItemView, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
 import {
-  Direction, addChild, addSibling, addSummary, canSummarize, commitEditing, deleteNode, editNode, editingNode, moveNode,
-  navigate, newMap, relayout, resetLayout, selectedNode, selectedNodes,
+  Direction, addBoundary, addChild, addSibling, addSummary, areSiblingTopics, commitEditing, deleteBoundary, deleteNode,
+  editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap, relayout, resetLayout, selectedBoundary,
+  selectedNode, selectedNodes,
 } from "./actions";
 import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
-import { nodeData } from "./model";
+import { nodeData, titleData } from "./model";
 import { FloatingPanel, PanelActions } from "./panel";
 import { Colors, DEFAULT_COLORS, setArrows, setColors } from "./styles";
 
@@ -24,6 +25,7 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
     central: { ...DEFAULT_COLORS.central, ...c.central },
     topicText: c.topicText ?? DEFAULT_COLORS.topicText,
     summary: { ...DEFAULT_COLORS.summary, ...c.summary },
+    boundary: { ...DEFAULT_COLORS.boundary, ...c.boundary },
     branches: c.branches?.length ? c.branches : DEFAULT_COLORS.branches,
   });
   return { ...DEFAULT_SETTINGS, ...saved, colors };
@@ -51,6 +53,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   // so keys that clash with Obsidian are claimed through a keymap scope while a drawing is active.
   private keyScope!: Scope;
   private scopePushed = false;
+  // While paused, keys and text edits are left to Excalidraw. Not saved: a restart resumes.
+  private paused = false;
 
   async onload() {
     this.settings = mergeSettings(await this.loadData());
@@ -61,7 +65,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.keyScope = new Scope(this.app.scope);
     this.keyScope.register([], "F2", () => {
       const view = this.activeView();
-      if (view) this.runOnNode(view, (id) => editNode(view, id));
+      if (view) this.edit(view);
       return false;
     });
 
@@ -83,6 +87,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "toggle-pause",
+      name: "Pause or resume mind map editing",
+      callback: () => this.togglePause(),
+    });
+    this.addCommand({
       id: "new-mind-map",
       name: "Insert new mind map",
       checkCallback: (checking) => this.withActiveView(checking, (v) => newMap(v)),
@@ -91,6 +100,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "add-summary",
       name: "Add summary to selected topics",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.summarize(v)),
+    });
+    this.addCommand({
+      id: "add-boundary",
+      name: "Add boundary around selected topics",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.bound(v)),
     });
     this.addCommand({
       id: "relayout",
@@ -135,10 +149,18 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   /** The scope is active only while a node is selected in the active drawing, so F2 renames the file otherwise. */
   private syncKeyScope() {
     const view = this.activeView();
-    const active = !!view && !view.excalidrawAPI!.getAppState().editingTextElement && !!selectedNode(view);
+    const active =
+      !this.paused && !!view && !view.excalidrawAPI!.getAppState().editingTextElement &&
+      (!!selectedNode(view) || !!selectedBoundary(view));
     if (active && !this.scopePushed) this.app.keymap.pushScope(this.keyScope);
     if (!active && this.scopePushed) this.app.keymap.popScope(this.keyScope);
     this.scopePushed = active;
+  }
+
+  private togglePause() {
+    this.paused = !this.paused;
+    this.syncKeyScope();
+    for (const s of this.states.values()) this.refreshPanel(s);
   }
 
   private syncViews() {
@@ -210,8 +232,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private afterEdit(s: ViewState, containerId: string) {
     const pending = s.pending;
     s.pending = null;
+    if (this.paused) return;
     const el = s.api.getSceneElements().find((e) => e.id === containerId);
-    if (!nodeData(el)) return;
+    if (!nodeData(el) && !titleData(el)) return;
     relayout(s.view, containerId);
     pending?.(containerId);
   }
@@ -228,8 +251,10 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       node: !!node,
       root: !!node && nodeData(node)?.parent === null,
       summary: !!node && !!nodeData(node)?.summary,
-      canSummarize: canSummarize(selected),
+      siblings: areSiblingTopics(selected),
+      boundary: !editing && !!selectedBoundary(s.view),
       canDeleteRoot: this.settings.allowDeleteCentralTopic,
+      paused: this.paused,
     });
   }
 
@@ -257,6 +282,26 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     addSummary(view, selectedNodes(view).map((n) => n.id));
   }
 
+  /** Puts a boundary around the selected topics, or the topic being edited. */
+  private bound(view: ExcalidrawView) {
+    if (editingNode(view)) return this.runOnNode(view, (id) => addBoundary(view, [id]));
+    addBoundary(view, selectedNodes(view).map((n) => n.id));
+  }
+
+  /** Edits the selected node's text, or the selected boundary's title. */
+  private edit(view: ExcalidrawView) {
+    const boundary = selectedBoundary(view);
+    if (boundary) return editBoundaryTitle(view, boundary);
+    this.runOnNode(view, (id) => editNode(view, id));
+  }
+
+  /** Deletes the selected node with its subtopics, or the selected boundary. */
+  private remove(view: ExcalidrawView) {
+    const boundary = selectedBoundary(view);
+    if (boundary) return deleteBoundary(view, boundary);
+    this.runOnNode(view, (id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic));
+  }
+
   private panelActions(view: ExcalidrawView): PanelActions {
     const on = (action: (id: string) => unknown) => () => this.runOnNode(view, action);
     return {
@@ -264,18 +309,20 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       addChild: on((id) => addChild(view, id)),
       addSibling: on((id) => addSibling(view, id, false)),
       addSummary: () => this.summarize(view),
-      edit: on((id) => editNode(view, id)),
-      remove: on((id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic)),
+      addBoundary: () => this.bound(view),
+      edit: () => this.edit(view),
+      remove: () => this.remove(view),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
       relayout: () => relayout(view, selectedNode(view)?.id),
       reset: () => resetLayout(view, selectedNode(view)?.id),
+      togglePause: () => this.togglePause(),
     };
   }
 
   // ---------- keyboard ----------
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (!e.isTrusted || e.isComposing) return; // our own replayed keys pass through to Excalidraw
+    if (this.paused || !e.isTrusted || e.isComposing) return; // our own replayed keys pass through to Excalidraw
     const view = this.activeView();
     if (!view) return;
     const target = e.target as HTMLElement;
@@ -294,6 +341,15 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       action = (id) => moveNode(view, id, e.key === "ArrowUp");
     } else if (appState.editingTextElement) {
+      if (editingTitle(view)) {
+        // Enter commits a boundary title.
+        if (e.key !== "Enter" || e.shiftKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        commitEditing(view);
+        return;
+      }
       // XMind behaviour inside the text editor: Enter commits, Tab/Insert commits and adds a child.
       if (!editingNode(view)) return;
       if (e.key === "Enter" && !e.shiftKey) action = () => undefined;
@@ -301,6 +357,17 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       if (!action) return;
     } else {
       if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      const boundary = selectedBoundary(view);
+      if (boundary) {
+        // A selected boundary: Delete removes it, Space or Enter edits its title.
+        if (e.key === "Delete" || e.key === "Backspace") deleteBoundary(view, boundary);
+        else if ((e.key === " " || e.key === "Enter") && !e.repeat) editBoundaryTitle(view, boundary);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
       if (!selectedNode(view)) return;
       switch (e.key) {
         case "Tab":
@@ -399,6 +466,12 @@ class MindMapSettingTab extends PluginSettingTab {
     picker(summary, "Text", () => colors.summary.text, (v) => (colors.summary.text = v));
     picker(summary, "Border and brace", () => colors.summary.border, (v) => (colors.summary.border = v));
     picker(summary, "Background", () => colors.summary.fill, (v) => (colors.summary.fill = v));
+
+    const boundary = new Setting(el).setName("Boundary").setDesc("Dashed line, background, title text, title background.");
+    picker(boundary, "Line", () => colors.boundary.line, (v) => (colors.boundary.line = v));
+    picker(boundary, "Background", () => colors.boundary.fill, (v) => (colors.boundary.fill = v));
+    picker(boundary, "Title text", () => colors.boundary.title, (v) => (colors.boundary.title = v));
+    picker(boundary, "Title background", () => colors.boundary.titleFill, (v) => (colors.boundary.titleFill = v));
 
     colors.branches.forEach((b, i) => {
       const s = new Setting(el)
