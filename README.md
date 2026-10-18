@@ -74,14 +74,14 @@ All options are in **Settings → Excalidraw Mind Map**.
 | Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. |
 | Arrows instead of lines | Off | Connectors end in an arrowhead pointing to the subtopic. |
 
-**Colors** can be set for:
+**Colors** are on their own page in the settings, for:
 
 - the central topic: text, border and background
 - the topic text of main topics and subtopics
 - summaries: text, border and brace, background
 - boundaries: dashed line, background, title text, title background
 - relationships: line and arrowhead, label text
-- branches: line and border, and main topic background. Main topics take the branch colors in turn. Branch colors can be added or removed, and **Reset colors to defaults** restores the original palette.
+- branches: line and border, and main topic background. Main topics take the branch colors in turn. Branch colors can be added, removed and reordered, and **Reset colors to defaults** restores the original palette.
 
 Color and arrow changes apply to topics and connectors created afterwards. To apply them to an existing map, use **Reset all** from the panel's layout menu or the command palette.
 

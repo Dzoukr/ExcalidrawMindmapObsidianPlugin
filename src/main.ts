@@ -1,4 +1,4 @@
-import { App, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
+import { App, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem } from "obsidian";
 import {
   Direction, addBoundary, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
   deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap,
@@ -577,108 +577,129 @@ class MindMapSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
-  display() {
-    this.containerEl.empty();
-    new Setting(this.containerEl)
-      .setName("Show control panel on desktop")
-      .setDesc("The floating panel is always shown on mobile.")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.showPanelOnDesktop).onChange(async (v) => {
-          this.plugin.settings.showPanelOnDesktop = v;
-          await this.plugin.saveSettings();
-        }),
-      );
-    new Setting(this.containerEl)
-      .setName("Allow deleting the central topic")
-      .setDesc("Deleting the central topic removes the whole mind map: every topic and connector.")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.allowDeleteCentralTopic).onChange(async (v) => {
-          this.plugin.settings.allowDeleteCentralTopic = v;
-          await this.plugin.saveSettings();
-        }),
-      );
-    new Setting(this.containerEl)
-      .setName("Arrows instead of lines")
-      .setDesc("Connectors point to the subtopic with an arrowhead. Used for connectors created from now on, and when you reset all.")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.arrows).onChange(async (v) => {
-          this.plugin.settings.arrows = v;
-          await this.plugin.saveSettings();
-        }),
-      );
-    this.displayColors();
+  // Control keys are paths into the settings, such as "colors.central.text".
+  getControlValue(key: string): unknown {
+    return key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], this.plugin.settings);
   }
 
-  private displayColors() {
-    const el = this.containerEl;
-    const colors = this.plugin.settings.colors;
-    const save = () => this.plugin.saveSettings();
-    const picker = (s: Setting, label: string, get: () => string, set: (v: string) => void) =>
-      s.addColorPicker((p) => {
-        p.setValue(get()).onChange(async (v) => {
-          set(v);
-          await save();
-        });
-        s.controlEl.lastElementChild?.setAttr("aria-label", label);
-      });
+  async setControlValue(key: string, value: unknown) {
+    const path = key.split(".");
+    const last = path.pop()!;
+    const target = path.reduce((o, k) => o[k] as Record<string, unknown>, this.plugin.settings as unknown as Record<string, unknown>);
+    target[last] = value;
+    await this.plugin.saveSettings();
+  }
 
-    new Setting(el)
-      .setName("Colors")
-      .setDesc("Used for topics created from now on. Existing topics keep their colors until you reset all from the panel's layout menu.")
-      .setHeading();
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    const color = (name: string, key: string): SettingDefinition => ({ name, control: { type: "color", key } });
+    return [
+      {
+        name: "Show control panel on desktop",
+        desc: "The floating panel is always shown on mobile.",
+        control: { type: "toggle", key: "showPanelOnDesktop" },
+      },
+      {
+        name: "Allow deleting the central topic",
+        desc: "Deleting the central topic removes the whole mind map: every topic and connector.",
+        control: { type: "toggle", key: "allowDeleteCentralTopic" },
+      },
+      {
+        name: "Arrows instead of lines",
+        desc: "Connectors point to the subtopic with an arrowhead. Used for connectors created from now on, and when you reset all.",
+        control: { type: "toggle", key: "arrows" },
+      },
+      {
+        type: "page",
+        name: "Colors",
+        desc: "Used for topics created from now on. Existing topics keep their colors until you reset all from the panel's layout menu.",
+        items: [
+          {
+            type: "group",
+            heading: "Central topic",
+            items: [color("Text", "colors.central.text"), color("Border", "colors.central.border"), color("Background", "colors.central.fill")],
+          },
+          {
+            type: "group",
+            heading: "Topics",
+            items: [{ ...color("Text", "colors.topicText"), desc: "Text of main topics and subtopics." }],
+          },
+          {
+            type: "group",
+            heading: "Summary",
+            items: [color("Text", "colors.summary.text"), color("Border and brace", "colors.summary.border"), color("Background", "colors.summary.fill")],
+          },
+          {
+            type: "group",
+            heading: "Boundary",
+            items: [
+              color("Line", "colors.boundary.line"),
+              color("Background", "colors.boundary.fill"),
+              color("Title text", "colors.boundary.title"),
+              color("Title background", "colors.boundary.titleFill"),
+            ],
+          },
+          {
+            type: "group",
+            heading: "Relationship",
+            items: [color("Line and arrowhead", "colors.relationship.line"), color("Label text", "colors.relationship.text")],
+          },
+          this.branchList(),
+          {
+            name: "Reset colors to defaults",
+            desc: "Restores the default colors, branch colors included.",
+            action: () => {
+              this.plugin.settings.colors = structuredClone(DEFAULT_COLORS);
+              void this.saveAndUpdate();
+            },
+          },
+        ],
+      },
+    ];
+  }
 
-    const central = new Setting(el).setName("Central topic").setDesc("Text, border and background.");
-    picker(central, "Text", () => colors.central.text, (v) => (colors.central.text = v));
-    picker(central, "Border", () => colors.central.border, (v) => (colors.central.border = v));
-    picker(central, "Background", () => colors.central.fill, (v) => (colors.central.fill = v));
+  /** Branch colors that main topics take in turn: line and border, then main topic background. */
+  private branchList(): SettingDefinitionItem {
+    const branches = this.plugin.settings.colors.branches;
+    return {
+      type: "list",
+      heading: "Branches",
+      items: branches.map((b, i) => ({
+        name: `Branch ${i + 1}`,
+        desc: i === 0 ? "Main topics take these in turn. Line and border, then main topic background." : undefined,
+        render: (s: Setting) => {
+          const picker = (label: string, get: () => string, set: (v: string) => void) =>
+            s.addColorPicker((p) => {
+              p.setValue(get()).onChange(async (v) => {
+                set(v);
+                await this.plugin.saveSettings();
+              });
+              s.controlEl.lastElementChild?.setAttr("aria-label", label);
+            });
+          picker("Line and border", () => b.stroke, (v) => (b.stroke = v));
+          picker("Background", () => b.fill, (v) => (b.fill = v));
+        },
+      })),
+      onDelete: (i) => {
+        if (branches.length <= 1) return void new Notice("At least one branch color is needed.");
+        branches.splice(i, 1);
+        void this.saveAndUpdate();
+      },
+      onReorder: (from, to) => {
+        branches.splice(to, 0, ...branches.splice(from, 1));
+        void this.saveAndUpdate();
+      },
+      addItem: {
+        name: "Add branch color",
+        action: () => {
+          branches.push({ ...DEFAULT_COLORS.branches[branches.length % DEFAULT_COLORS.branches.length] });
+          void this.saveAndUpdate();
+        },
+      },
+    };
+  }
 
-    picker(new Setting(el).setName("Topic text").setDesc("Text of main topics and subtopics."),
-      "Text", () => colors.topicText, (v) => (colors.topicText = v));
-
-    const summary = new Setting(el).setName("Summary").setDesc("Text, border and brace, background.");
-    picker(summary, "Text", () => colors.summary.text, (v) => (colors.summary.text = v));
-    picker(summary, "Border and brace", () => colors.summary.border, (v) => (colors.summary.border = v));
-    picker(summary, "Background", () => colors.summary.fill, (v) => (colors.summary.fill = v));
-
-    const boundary = new Setting(el).setName("Boundary").setDesc("Dashed line, background, title text, title background.");
-    picker(boundary, "Line", () => colors.boundary.line, (v) => (colors.boundary.line = v));
-    picker(boundary, "Background", () => colors.boundary.fill, (v) => (colors.boundary.fill = v));
-    picker(boundary, "Title text", () => colors.boundary.title, (v) => (colors.boundary.title = v));
-    picker(boundary, "Title background", () => colors.boundary.titleFill, (v) => (colors.boundary.titleFill = v));
-
-    const relationship = new Setting(el).setName("Relationship").setDesc("Dashed line and arrowhead, label text.");
-    picker(relationship, "Line", () => colors.relationship.line, (v) => (colors.relationship.line = v));
-    picker(relationship, "Label text", () => colors.relationship.text, (v) => (colors.relationship.text = v));
-
-    colors.branches.forEach((b, i) => {
-      const s = new Setting(el)
-        .setName(`Branch ${i + 1}`)
-        .setDesc(i === 0 ? "Main topics take these in turn. Line and border, then main topic background." : "");
-      picker(s, "Line and border", () => b.stroke, (v) => (b.stroke = v));
-      picker(s, "Background", () => b.fill, (v) => (b.fill = v));
-      s.addExtraButton((x) =>
-        x.setIcon("trash-2").setTooltip("Remove").setDisabled(colors.branches.length <= 1).onClick(async () => {
-          colors.branches.splice(i, 1);
-          await save();
-          this.display();
-        }),
-      );
-    });
-
-    new Setting(el)
-      .addButton((x) =>
-        x.setButtonText("Add branch color").onClick(async () => {
-          colors.branches.push({ ...DEFAULT_COLORS.branches[colors.branches.length % DEFAULT_COLORS.branches.length] });
-          await save();
-          this.display();
-        }),
-      )
-      .addButton((x) =>
-        x.setButtonText("Reset colors to defaults").onClick(async () => {
-          this.plugin.settings.colors = structuredClone(DEFAULT_COLORS);
-          await save();
-          this.display();
-        }),
-      );
+  private async saveAndUpdate() {
+    await this.plugin.saveSettings();
+    this.update();
   }
 }
