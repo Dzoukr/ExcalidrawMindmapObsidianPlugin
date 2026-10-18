@@ -1,6 +1,6 @@
 import { App, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
 import {
-  Direction, addBoundary, addChild, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
+  Direction, addBoundary, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
   deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap,
   newMapFromOutline, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
   selectedNode, selectedNodes, selectedTopics, toggleFold, topicState, unfold,
@@ -28,6 +28,10 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
     topicText: c.topicText ?? DEFAULT_COLORS.topicText,
     summary: { ...DEFAULT_COLORS.summary, ...c.summary },
     boundary: { ...DEFAULT_COLORS.boundary, ...c.boundary },
+    // Before it had a text color, the relationship color was a single string for both.
+    relationship: typeof c.relationship === "string"
+      ? { line: c.relationship, text: c.relationship }
+      : { ...DEFAULT_COLORS.relationship, ...c.relationship },
     branches: c.branches?.length ? c.branches : DEFAULT_COLORS.branches,
   });
   return { ...DEFAULT_SETTINGS, ...saved, colors };
@@ -121,6 +125,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "add-summary",
       name: "Add summary to selected topics",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.summarize(v)),
+    });
+    this.addCommand({
+      id: "add-relationship",
+      name: "Add relationship between the two selected topics",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.relate(v)),
     });
     this.addCommand({
       id: "add-boundary",
@@ -267,6 +276,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       s.raf = requestAnimationFrame(() => {
         s.raf = 0;
         this.checkBadge(s);
+        if (!this.paused && !s.api.getAppState().editingTextElement) followRelations(s.view);
         this.refreshPanel(s);
       });
     }
@@ -304,6 +314,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       root: !!node && nodeData(node)?.parent === null,
       summary: !!node && !!nodeData(node)?.summary,
       topics: !editing && selectedTopics(s.view).length > 0,
+      pair: !editing && selected.length === 2,
       siblings: areSiblingTopics(selected),
       boundary: !editing && !!selectedBoundary(s.view),
       ...t,
@@ -340,6 +351,13 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private bound(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => addBoundary(view, [id]));
     addBoundary(view, selectedNodes(view).map((n) => n.id));
+  }
+
+  /** Connects the two selected topics with a relationship, from the first selected to the second. */
+  private relate(view: ExcalidrawView) {
+    const nodes = selectedNodes(view);
+    if (nodes.length !== 2) return void new Notice("Select two topics to connect.");
+    addRelationship(view, nodes[0].id, nodes[1].id);
   }
 
   /** Edits the selected node's text, or the selected boundary's title. */
@@ -435,6 +453,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       addSibling: on((id) => addSibling(view, id, false)),
       addSummary: () => this.summarize(view),
       addBoundary: () => this.bound(view),
+      addRelationship: () => this.relate(view),
       edit: () => this.edit(view),
       remove: () => this.remove(view),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
@@ -626,6 +645,10 @@ class MindMapSettingTab extends PluginSettingTab {
     picker(boundary, "Background", () => colors.boundary.fill, (v) => (colors.boundary.fill = v));
     picker(boundary, "Title text", () => colors.boundary.title, (v) => (colors.boundary.title = v));
     picker(boundary, "Title background", () => colors.boundary.titleFill, (v) => (colors.boundary.titleFill = v));
+
+    const relationship = new Setting(el).setName("Relationship").setDesc("Dashed line and arrowhead, label text.");
+    picker(relationship, "Line", () => colors.relationship.line, (v) => (colors.relationship.line = v));
+    picker(relationship, "Label text", () => colors.relationship.text, (v) => (colors.relationship.text = v));
 
     colors.branches.forEach((b, i) => {
       const s = new Setting(el)

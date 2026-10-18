@@ -297,6 +297,50 @@ export function edgePoints(parent: Box, child: Box, side: Side): { start: Vec; e
     : { start: { x: parent.x, y: pcy }, end: { x: child.x + child.w, y: ccy } };
 }
 
+export const RELATION_GAP = 6; // topic to the end of a relationship
+export const RELATION_BEND = 0.2; // sideways bulge of a new relationship, as a fraction of its length
+
+/** Where the ray from the box's center toward the point leaves the box grown by the gap; the center when the point is inside. */
+function exitPoint(b: Box, toward: Vec, gap: number): Vec {
+  const c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const dx = toward.x - c.x;
+  const dy = toward.y - c.y;
+  const hw = b.w / 2 + gap;
+  const hh = b.h / 2 + gap;
+  if (Math.abs(dx) <= hw && Math.abs(dy) <= hh) return c;
+  const t = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity);
+  return { x: c.x + dx * t, y: c.y + dy * t };
+}
+
+/**
+ * Curved relationship from box a to box b, drawn through three points: its ends leave each box
+ * toward the middle point, which bulges sideways from the straight line by bend times its length.
+ */
+export function relationPoints(a: Box, b: Box, bend: number): { start: Vec; mid: Vec; end: Vec } {
+  const ca = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+  const cb = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const len = Math.hypot(cb.x - ca.x, cb.y - ca.y) || 1;
+  const n = { x: -(cb.y - ca.y) / len, y: (cb.x - ca.x) / len };
+  const control = { x: (ca.x + cb.x) / 2 + n.x * bend * len, y: (ca.y + cb.y) / 2 + n.y * bend * len };
+  const start = exitPoint(a, control, RELATION_GAP);
+  const end = exitPoint(b, control, RELATION_GAP);
+  // The bulge is measured across the line between the ends, the way relationBend reads it back.
+  const l = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+  const m = { x: -(end.y - start.y) / l, y: (end.x - start.x) / l };
+  const mid = { x: (start.x + end.x) / 2 + m.x * bend * l, y: (start.y + end.y) / 2 + m.y * bend * l };
+  return { start, mid, end };
+}
+
+/** The bend of a three-point relationship as drawn (points relative to its start), so a curve the user dragged is kept. */
+export function relationBend(points: number[][]): number | null {
+  if (points.length !== 3) return null;
+  const [[x0, y0], [x1, y1], [x2, y2]] = points;
+  const len = Math.hypot(x2 - x0, y2 - y0);
+  if (len < 1) return null;
+  const n = { x: -(y2 - y0) / len, y: (x2 - x0) / len };
+  return ((x1 - (x0 + x2) / 2) * n.x + (y1 - (y0 + y2) / 2) * n.y) / len;
+}
+
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 /**

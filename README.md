@@ -32,6 +32,8 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 
 **Collapse** (Ctrl+/, the fold button in the panel, or the command "Collapse or expand selected topic") works as a toggle, like XMind's Collapse/Expand. On a topic it collapses the topic together with everything below it, hiding its subtopics, summaries and boundaries; the same key or button expands it all again. On the central topic, which can't be collapsed itself, it collapses or expands all main topics. A badge next to a collapsed topic shows how many topics are hidden, and clicking it expands the topic. Adding a subtopic to a collapsed topic expands it as well.
 
+**Add relationship** (the panel button or the command "Add relationship between the two selected topics") draws a dashed, curved arrow from the first selected topic to the second, like XMind's Relationship; the topics may belong to different maps. It stays attached to both topics, whether the layout moves them or you drag them, keeping the curve you give it by selecting it and dragging its middle point (Reset all brings back the default curve). Double-click it to add a label, and delete it like any element. It hides while either topic is collapsed away and goes when either topic is deleted.
+
 The last button in the panel (or the command "Pause or resume mind map editing") pauses the plugin: its keys are left to Excalidraw, text edits no longer re-run the layout, and the other buttons are disabled until you resume. A restart resumes it too.
 
 While editing text: Enter commits, Shift+Enter adds a line break, Tab/Insert commits and adds a child.
@@ -40,7 +42,7 @@ Layout runs automatically after every change. Nodes can be dragged freely. The o
 
 Every operation is a single undo step.
 
-Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), boundaries (line, background, title text, title background), and the branch colors that main topics take in turn. Changes apply to topics created afterwards, and to existing maps with **Reset all**. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards, or on all of them with Reset all.
+Colors are set in the plugin settings: the central topic (text, border, background), the topic text, summaries (text, border and brace, background), boundaries (line, background, title text, title background), relationships (line and arrowhead, label text), and the branch colors that main topics take in turn. Changes apply to topics created afterwards, and to existing maps with **Reset all**. The setting "Arrows instead of lines" puts an arrowhead on connectors created afterwards, or on all of them with Reset all.
 
 ## Data model
 
@@ -49,6 +51,7 @@ Colors are set in the plugin settings: the central topic (text, border, backgrou
 - Connector: arrow bound to both nodes, `customData.mindmap = { edge, root, parent, child }`.
 - Brace: line next to the summarized topics, `customData.mindmap = { brace, root, summary }`.
 - Boundary: dashed rectangle behind the map, `customData.mindmap = { boundary, self, root, parent, topics }`, and its title, a rectangle with bound text, `customData.mindmap = { boundaryTitle, self, root, boundary }`.
+- Relationship: curved arrow bound to both topics, `customData.mindmap = { relation, self, from, to, bend }`, with an optional bound label.
 - Fold badge: ellipse with bound text next to a collapsed topic, `customData.mindmap = { badge, self, root, node }`.
 - Hidden elements (everything under a collapsed topic) get opacity 0 and are locked; their own opacity and lock are kept in `customData.mindmapHidden` and restored when shown again.
 - Copies of nodes (paste, Alt-drag) are ignored by the mind map, because `self` no longer matches the element id.

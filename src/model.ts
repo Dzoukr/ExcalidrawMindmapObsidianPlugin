@@ -43,6 +43,15 @@ export interface TitleData {
   boundary: string;
 }
 
+/** Relationship: a curved arrow from one topic to another, possibly of another map, with an optional label. */
+export interface RelationData {
+  relation: true;
+  self: string;
+  from: string;
+  to: string;
+  bend?: number; // sideways bulge as a fraction of its length, see relationPoints; the default when not set
+}
+
 /** Count of hidden topics shown next to a folded topic; selecting it unfolds the topic. */
 export interface BadgeData {
   badge: true;
@@ -101,7 +110,7 @@ export interface MindMap {
 
 export function nodeData(el: El | undefined | null): NodeData | null {
   const d = el?.customData?.[KEY];
-  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.self !== el!.id) return null;
+  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.relation || d.self !== el!.id) return null;
   return d as NodeData;
 }
 
@@ -118,6 +127,11 @@ export function boundaryData(el: El | undefined | null): BoundaryData | null {
 export function titleData(el: El | undefined | null): TitleData | null {
   const d = el?.customData?.[KEY];
   return d?.boundaryTitle && d.self === el!.id ? (d as TitleData) : null;
+}
+
+export function relationData(el: El | undefined | null): RelationData | null {
+  const d = el?.customData?.[KEY];
+  return d?.relation && d.self === el!.id ? (d as RelationData) : null;
 }
 
 export function badgeData(el: El | undefined | null): BadgeData | null {

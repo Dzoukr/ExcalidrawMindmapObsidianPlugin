@@ -18,6 +18,7 @@ export interface Colors {
   topicText: string; // text of main topics and subtopics
   summary: { text: string; border: string; fill: string }; // border also colors the brace
   boundary: { line: string; fill: string; title: string; titleFill: string };
+  relationship: { line: string; text: string }; // line and arrowhead, label text
   branches: Branch[]; // cycled through for the main topics of a map
 }
 
@@ -26,6 +27,7 @@ export const DEFAULT_COLORS: Colors = {
   topicText: "#1e1e1e",
   summary: { text: "#1e1e1e", border: "#1e1e1e", fill: "#ffffff" },
   boundary: { line: "#868e96", fill: "#e9ecef", title: "#1e1e1e", titleFill: "#adb5bd" },
+  relationship: { line: "#495057", text: "#495057" },
   branches: [
     { stroke: "#e03131", fill: "#ffc9c9" },
     { stroke: "#1971c2", fill: "#a5d8ff" },
@@ -84,6 +86,10 @@ export const TITLE_FONT_SIZE = 16;
 export const BADGE_PADDING = { padX: 5, padY: 2 };
 export const BADGE_FONT_SIZE = 12;
 export const BADGE_GAP = 6; // folded topic to its badge
+
+export function relationshipColors() {
+  return colors.relationship;
+}
 
 export function boundaryColors() {
   return colors.boundary;

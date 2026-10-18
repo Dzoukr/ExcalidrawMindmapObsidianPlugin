@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LNode, PlacedInfo } from "../src/layout.ts";
-import { BOUNDARY_PAD, BRACE_GAP, BRACE_W, ROOT_H_GAP, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, findFreeSpot, updateOffsets } from "../src/layout.ts";
+import { BOUNDARY_PAD, BRACE_GAP, BRACE_W, RELATION_GAP, ROOT_H_GAP, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, findFreeSpot, relationBend, relationPoints, updateOffsets } from "../src/layout.ts";
 
 const node = (id: string, side: "R" | "L" | null, children: LNode[] = []): LNode => ({ id, side, children });
 const size = () => ({ w: 100, h: 40 });
@@ -150,4 +150,22 @@ test("hidden nodes keep their offsets", () => {
   const info = (id: string): PlacedInfo => ({ x: 0, y: 0, lx: 0, ly: 0, ox: id === "a1" ? 7 : 0, oy: 0 });
   const o = updateOffsets(node("r", null, [a]), info);
   assert.equal(o.has("a1"), false);
+});
+
+test("a relationship leaves each box toward its bulging middle point", () => {
+  const a = { x: 0, y: 0, w: 100, h: 40 };
+  const b = { x: 300, y: 0, w: 100, h: 40 };
+  const straight = relationPoints(a, b, 0);
+  assert.deepEqual(straight.start, { x: 100 + RELATION_GAP, y: 20 });
+  assert.deepEqual(straight.end, { x: 300 - RELATION_GAP, y: 20 });
+  const curved = relationPoints(a, b, 0.2);
+  assert.ok(curved.mid.y > 20); // bulges to one side
+  assert.ok(curved.start.x > 50 && curved.end.x < 350);
+});
+
+test("the bend read back from a drawn relationship matches the one it was drawn with", () => {
+  const { start, mid, end } = relationPoints({ x: 0, y: 0, w: 80, h: 30 }, { x: 200, y: 150, w: 80, h: 30 }, 0.3);
+  const bend = relationBend([[0, 0], [mid.x - start.x, mid.y - start.y], [end.x - start.x, end.y - start.y]])!;
+  assert.ok(Math.abs(bend - 0.3) < 1e-9);
+  assert.equal(relationBend([[0, 0], [10, 10]]), null);
 });

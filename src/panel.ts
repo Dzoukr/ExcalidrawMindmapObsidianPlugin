@@ -7,6 +7,7 @@ export interface PanelActions {
   addSibling(): void;
   addSummary(): void;
   addBoundary(): void;
+  addRelationship(): void;
   edit(): void;
   remove(): void;
   nav(dir: Direction): void;
@@ -26,6 +27,7 @@ export interface PanelState {
   root: boolean; // that node is the central topic
   summary: boolean; // that node is a summary topic
   topics: boolean; // one or more topics are selected, to copy
+  pair: boolean; // exactly two topics are selected, to connect with a relationship
   siblings: boolean; // the selection is one or more sibling topics that can get a summary or a boundary
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
   foldable: boolean; // that node can be collapsed or expanded
@@ -36,7 +38,7 @@ export interface PanelState {
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 
-type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "copy" | "paste" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
+type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "edit" | "remove" | "copy" | "paste" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
 
 /** Floating control bar docked at the bottom of an Excalidraw view. */
 export class FloatingPanel {
@@ -65,6 +67,7 @@ export class FloatingPanel {
     button(g2, "sibling", "plus", "Add sibling (Enter)", a.addSibling);
     button(g2, "summary", "braces", "Add summary of the selected topics", a.addSummary);
     button(g2, "boundary", "square-dashed", "Add boundary around the selected topics", a.addBoundary);
+    button(g2, "relation", "spline", "Add relationship from the first to the second selected topic", a.addRelationship);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
     const gc = group();
@@ -121,6 +124,7 @@ export class FloatingPanel {
     set("sibling", s.node && !s.root && !s.summary);
     set("summary", s.siblings);
     set("boundary", s.siblings);
+    set("relation", s.pair);
     set("edit", s.node || s.boundary);
     set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary);
     set("fold", s.foldable);

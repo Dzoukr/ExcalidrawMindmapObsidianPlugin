@@ -1,14 +1,17 @@
 import { Notice } from "obsidian";
 import { El, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
-import { Box, Brace, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, updateOffsets } from "./layout";
+import {
+  Box, Brace, RELATION_BEND, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
+} from "./layout";
 import {
   HIDDEN_KEY, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, braceData, buildMap,
-  edgeData, isHidden, nodeData, resolveNodeElement, rootIdOf, subtree, titleData,
+  edgeData, isHidden, nodeData, relationData, resolveNodeElement, rootIdOf, subtree, titleData,
 } from "./model";
 import { OutlineItem, parseOutline, toMarkdown } from "./outline";
 import {
   BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING,
-  SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, boundaryColors, branchColor, connectorArrowhead, paddingFor, styleFor, summaryStyle,
+  SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, boundaryColors, branchColor, connectorArrowhead, paddingFor, relationshipColors,
+  styleFor, summaryStyle,
 } from "./styles";
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -63,7 +66,7 @@ export function selectedTopics(view: ExcalidrawView): El[] {
     let el = byId.get(id);
     if (el?.type === "text" && el.containerId) el = byId.get(el.containerId);
     if (nodeData(el)) nodes.set(el!.id, el!);
-    else if (!edgeData(el) && !braceData(el) && !badgeData(el) && !boundaryData(el) && !titleData(el)) return [];
+    else if (!edgeData(el) && !braceData(el) && !badgeData(el) && !boundaryData(el) && !titleData(el) && !relationData(el)) return [];
   }
   return [...nodes.values()];
 }
@@ -551,7 +554,133 @@ function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
       for (const el of [b.el, b.title, b.titleText]) if (el) setHidden(tx, el.id, h);
     }
   }
+  layoutRelations(tx, map);
   return map;
+}
+
+/** Scene-space box of an element. */
+const boxOf = (el: El): Box => ({ x: el.x, y: el.y, w: el.width, h: el.height });
+
+/**
+ * Re-routes the relationships touching the map between their topics, keeping the bend they have,
+ * and moves their labels along. They are hidden while either topic is, and go when either is gone.
+ */
+function layoutRelations(tx: SceneTx, map: MindMap) {
+  for (const el of tx.live()) {
+    const d = relationData(el);
+    if (!d || (!map.nodes.has(d.from) && !map.nodes.has(d.to))) continue;
+    const a = tx.get(d.from);
+    const b = tx.get(d.to);
+    if (!a || a.isDeleted || !nodeData(a) || !b || b.isDeleted || !nodeData(b) || a === b) {
+      deleteWithText(tx, el);
+      continue;
+    }
+    const label = labelOf(tx, el);
+    const hidden = !!a.customData?.[HIDDEN_KEY] || !!b.customData?.[HIDDEN_KEY];
+    if (!hidden) routeRelation(tx, el, label, a, b);
+    setHidden(tx, el.id, hidden);
+    if (label) setHidden(tx, label.id, hidden);
+  }
+}
+
+/** The relationship's label. One Excalidraw just added gets the label color once; later the user's color stays. */
+function labelOf(tx: SceneTx, el: El): El | null {
+  const tid = boundTextId(el);
+  const t = tid ? tx.get(tid) : undefined;
+  if (!t || t.isDeleted) return null;
+  if (!t.customData?.[KEY]?.relationLabel)
+    tx.patch(t.id, { strokeColor: relationshipColors().text, customData: { ...t.customData, [KEY]: { relationLabel: true } } });
+  return tx.get(t.id)!;
+}
+
+/**
+ * Runs the relationship from topic a to topic b with its stored bend, its label on the middle point.
+ * The bend is never read back from the drawn points here: Excalidraw moves the ends of a bound arrow
+ * on its own, so the points may be distorted.
+ */
+function routeRelation(tx: SceneTx, el: El, label: El | null, a: El, b: El) {
+  const { start, mid, end } = relationPoints(boxOf(a), boxOf(b), relationData(el)?.bend ?? RELATION_BEND);
+  const pts = [[0, 0], [mid.x - start.x, mid.y - start.y], [end.x - start.x, end.y - start.y]];
+  const cur = el.points as number[][] | undefined;
+  const same = near(el.x, start.x) && near(el.y, start.y) && cur?.length === 3 &&
+    pts.every((p, i) => near(cur[i][0], p[0]) && near(cur[i][1], p[1]));
+  if (!same) {
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    tx.patch(el.id, {
+      x: start.x, y: start.y, points: pts,
+      width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys),
+    });
+  }
+  // Excalidraw centers a label on the middle point of a three-point arrow.
+  if (label && (!near(label.x, mid.x - label.width / 2) || !near(label.y, mid.y - label.height / 2)))
+    tx.patch(label.id, { x: mid.x - label.width / 2, y: mid.y - label.height / 2 });
+}
+
+/**
+ * Keeps relationships on their topics when Excalidraw moves the topics itself, while dragging or on undo:
+ * re-routes the visible ones that no longer run between their topics. A selected relationship is left
+ * to the user instead, and the curve they give its middle point becomes its bend.
+ * Not an undo step of its own, the topics' move is.
+ */
+export function followRelations(view: ExcalidrawView) {
+  const api = view.excalidrawAPI;
+  if (!api) return;
+  const els = api.getSceneElements();
+  if (!els.some((e) => relationData(e))) return;
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const tx = new SceneTx(view);
+  for (const el of els) {
+    const d = relationData(el);
+    if (!d || el.customData?.[HIDDEN_KEY]) continue;
+    if (sel[el.id]) {
+      labelOf(tx, el);
+      const bend = relationBend(el.points ?? []);
+      if (bend !== null && !near(bend, d.bend ?? RELATION_BEND))
+        tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, bend } } });
+      continue;
+    }
+    const a = tx.get(d.from);
+    const b = tx.get(d.to);
+    if (!a || a.isDeleted || !b || b.isDeleted || a === b) continue; // the next layout deletes it
+    routeRelation(tx, el, labelOf(tx, el), a, b);
+  }
+  tx.commit("NEVER");
+}
+
+/** Draws a relationship from one topic to another, like XMind's Relationship, and selects it. */
+export async function addRelationship(view: ExcalidrawView, fromId: string, toId: string) {
+  const id = run(view, (tx, ea) => {
+    const a = tx.get(fromId);
+    const b = tx.get(toId);
+    if (!nodeData(a) || !nodeData(b) || fromId === toId) return null;
+    const { start, mid, end } = relationPoints(boxOf(a!), boxOf(b!), RELATION_BEND);
+    ea.clear();
+    Object.assign(ea.style, {
+      strokeColor: relationshipColors().line,
+      strokeWidth: 1.5,
+      strokeStyle: "dashed",
+      roughness: a!.roughness,
+      roundness: { type: 2 }, // smooth curve through the points
+      opacity: 100,
+    });
+    const id: string = ea.addArrow([[start.x, start.y], [mid.x, mid.y], [end.x, end.y]], {
+      startArrowHead: null,
+      endArrowHead: "arrow",
+      startObjectId: fromId,
+      endObjectId: toId,
+    });
+    const el: El = ea.getElement(id);
+    el.customData = { [KEY]: { relation: true, self: id, from: fromId, to: toId, bend: RELATION_BEND } };
+    tx.add(el);
+    addBound(tx, fromId, id);
+    addBound(tx, toId, id);
+    ea.clear();
+    return id;
+  });
+  if (!id) return;
+  await nextFrame();
+  select(view, id);
 }
 
 /** Puts the badge with the count of hidden topics just outside the folded topic, creating or updating it. */
@@ -727,10 +856,14 @@ function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
     for (const b of x.boundaries) deleteBoundaryEls(tx, b);
     const badge = map.badges.get(x.id);
     if (badge) deleteWithText(tx, badge.el);
-    // Unbind other arrows that pointed at the deleted node.
+    // Relationships go with the topic, other arrows that pointed at it are unbound.
     for (const b of x.el.boundElements ?? []) {
       const a = tx.get(b.id);
       if (b.type !== "arrow" || !a || a.isDeleted || edgeData(a)) continue;
+      if (relationData(a)) {
+        deleteWithText(tx, a);
+        continue;
+      }
       const p: Partial<El> = {};
       if (a.startBinding?.elementId === x.id) p.startBinding = null;
       if (a.endBinding?.elementId === x.id) p.endBinding = null;
@@ -1297,6 +1430,15 @@ function restyleMap(tx: SceneTx, map: MindMap) {
       strokeColor: color, strokeWidth: n.depth === 1 ? 2 : 1.5, strokeStyle: "solid", startArrowhead: null, endArrowhead: connectorArrowhead(),
     });
     patchChanged(tx, map.braces.get(n.id), { strokeColor: color, strokeWidth: 2, strokeStyle: "solid" });
+  }
+  for (const el of tx.live()) {
+    const d = relationData(el);
+    if (!d || (!map.nodes.has(d.from) && !map.nodes.has(d.to))) continue;
+    const color = relationshipColors();
+    patchChanged(tx, el, { strokeColor: color.line, strokeWidth: 1.5, strokeStyle: "dashed", startArrowhead: null, endArrowhead: "arrow" });
+    if (d.bend !== RELATION_BEND) tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, bend: RELATION_BEND } } });
+    const tid = boundTextId(el);
+    patchChanged(tx, tid ? tx.get(tid) : null, { strokeColor: color.text });
   }
   const c = boundaryColors();
   for (const b of map.boundaries.values()) {
