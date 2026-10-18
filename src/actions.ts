@@ -1,0 +1,545 @@
+import { Notice } from "obsidian";
+import { El, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
+import { Box, Side, Vec, computeLayout, edgePoints, findFreeSpot, updateOffsets } from "./layout";
+import { KEY, MMNode, MindMap, NodeData, buildMap, edgeData, nodeData, resolveNodeElement, subtree } from "./model";
+import { Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, branchColor, paddingFor, styleFor } from "./styles";
+
+export type Direction = "up" | "down" | "left" | "right";
+
+const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const near = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) < 0.01;
+
+async function waitFor<T>(probe: () => T | null, frames: number): Promise<T | null> {
+  for (let i = 0; i < frames; i++) {
+    const v = probe();
+    if (v) return v;
+    await nextFrame();
+  }
+  return probe();
+}
+
+// ---------- selection ----------
+
+/** The single mind map node currently selected in the view (container or its text), if any. */
+export function selectedNode(view: ExcalidrawView): El | null {
+  const api = view.excalidrawAPI;
+  if (!api) return null;
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const ids = Object.keys(sel).filter((k) => sel[k]);
+  if (!ids.length || ids.length > 2) return null;
+  const byId = new Map(api.getSceneElements().map((e) => [e.id, e]));
+  const nodes = new Set<string>();
+  for (const id of ids) {
+    const n = resolveNodeElement(byId.get(id), byId);
+    if (!n) return null;
+    nodes.add(n.id);
+  }
+  return nodes.size === 1 ? byId.get([...nodes][0])! : null;
+}
+
+/** The mind map node whose text is being edited, if any. */
+export function editingNode(view: ExcalidrawView): El | null {
+  const api = view.excalidrawAPI;
+  const cid = api?.getAppState().editingTextElement?.containerId;
+  if (!cid) return null;
+  const el = api!.getSceneElements().find((e) => e.id === cid);
+  return nodeData(el) ? el! : null;
+}
+
+function select(view: ExcalidrawView, id: string) {
+  const ea = getEA(view);
+  ea?.selectElementsInView([id]);
+  ea?.destroy?.();
+  ensureVisible(view, id);
+}
+
+function ensureVisible(view: ExcalidrawView, id: string) {
+  const api = view.excalidrawAPI!;
+  const el = api.getSceneElements().find((e) => e.id === id);
+  if (!el) return;
+  const st = api.getAppState();
+  const z = st.zoom?.value ?? 1;
+  const m = 60 / z; // margin in scene units
+  // Visible scene rectangle is [-scrollX, -scrollX + width / z] horizontally, same for y.
+  const scroll = (pos: number, size: number, scrollPos: number, viewSize: number) => {
+    if (pos - m < -scrollPos) return -(pos - m);
+    if (pos + size + m > -scrollPos + viewSize / z) return -(pos + size + m - viewSize / z);
+    return scrollPos;
+  };
+  const scrollX = scroll(el.x, el.width, st.scrollX, st.width);
+  const scrollY = scroll(el.y, el.height, st.scrollY, st.height);
+  if (scrollX !== st.scrollX || scrollY !== st.scrollY) api.updateScene({ appState: { scrollX, scrollY }, captureUpdate: "NEVER" });
+}
+
+// ---------- text editing ----------
+
+/** Starts Excalidraw's in-place text editor on the selected node by replaying the Enter key Excalidraw itself handles. */
+export async function startEditing(view: ExcalidrawView, selectAll: boolean) {
+  const host = view.contentEl.querySelector<HTMLElement>(".excalidraw");
+  if (!host) return;
+  host.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+  const ta = await waitFor(() => view.contentEl.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg"), 30);
+  if (ta && selectAll) {
+    ta.focus();
+    ta.select();
+  }
+}
+
+/** Finishes text editing the way Escape does in Excalidraw: commits the text and keeps the node selected. */
+export function commitEditing(view: ExcalidrawView): boolean {
+  const ta = view.contentEl.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+  if (!ta) return false;
+  ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+  return true;
+}
+
+async function focusNode(view: ExcalidrawView, id: string, edit: boolean) {
+  await nextFrame();
+  select(view, id);
+  if (!edit) return;
+  await nextFrame();
+  await startEditing(view, true);
+}
+
+// ---------- element construction ----------
+
+interface NewNode {
+  depth: number;
+  branch: Branch;
+  data: Omit<NodeData, "self">;
+  at: Vec;
+  fontFamily: number;
+  roughness: number;
+}
+
+function createNode(tx: SceneTx, ea: any, n: NewNode): string {
+  const st = styleFor(n.depth, n.branch);
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: st.textColor,
+    backgroundColor: st.backgroundColor,
+    fillStyle: "solid",
+    strokeWidth: st.strokeWidth,
+    strokeStyle: "solid",
+    roughness: n.roughness,
+    roundness: { type: 3 },
+    opacity: 100,
+    angle: 0,
+    fontFamily: n.fontFamily,
+    fontSize: st.fontSize,
+    textAlign: "center",
+    verticalAlign: "middle",
+  });
+  const id: string = ea.addText(n.at.x, n.at.y, DEFAULT_TEXT[Math.min(n.depth, 2)], {
+    box: true,
+    boxPadding: st.padX,
+    boxStrokeColor: st.borderColor,
+    textAlign: "center",
+    textVerticalAlign: "middle",
+  });
+  for (const el of ea.getElements() as El[]) {
+    if (el.id === id) el.customData = { ...(el.customData ?? {}), [KEY]: { ...n.data, self: id, root: n.data.root || id } };
+    tx.add(el);
+  }
+  ea.clear();
+  return id;
+}
+
+function addBound(tx: SceneTx, elId: string, arrowId: string) {
+  const el = tx.get(elId);
+  if (!el || el.boundElements?.some((b) => b.id === arrowId)) return;
+  tx.patch(elId, { boundElements: [...(el.boundElements ?? []), { type: "arrow", id: arrowId }] });
+}
+
+function removeBound(tx: SceneTx, elId: string | undefined, arrowId: string) {
+  const el = elId ? tx.get(elId) : undefined;
+  if (!el?.boundElements?.some((b) => b.id === arrowId)) return;
+  tx.patch(el.id, { boundElements: el.boundElements.filter((b) => b.id !== arrowId) });
+}
+
+function removeEdge(tx: SceneTx, edge: El) {
+  tx.delete(edge.id);
+  removeBound(tx, edge.startBinding?.elementId, edge.id);
+  removeBound(tx, edge.endBinding?.elementId, edge.id);
+}
+
+function createEdge(tx: SceneTx, ea: any, rootId: string, n: MMNode, start: Vec, end: Vec) {
+  const parent = n.parent!;
+  const side = n.side as Side;
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: n.el.strokeColor,
+    strokeWidth: n.depth === 1 ? 2 : 1.5,
+    strokeStyle: "solid",
+    roughness: n.el.roughness,
+    roundness: null,
+    opacity: 100,
+  });
+  const id: string = ea.addArrow(
+    [[start.x, start.y], [end.x, end.y]],
+    {
+      startArrowHead: null,
+      endArrowHead: null,
+      startObjectId: parent.id,
+      endObjectId: n.id,
+      startFixedPoint: side === "R" ? [1, 0.5] : [0, 0.5],
+      endFixedPoint: side === "R" ? [0, 0.5] : [1, 0.5],
+    },
+  );
+  const el: El = ea.getElement(id);
+  el.customData = { [KEY]: { edge: true, root: rootId, parent: parent.id, child: n.id } };
+  tx.add(el);
+  addBound(tx, parent.id, id);
+  addBound(tx, n.id, id);
+  ea.clear();
+}
+
+// ---------- layout ----------
+
+interface NodeSize { w: number; h: number; tw: number; th: number; }
+
+function measureNode(ea: any, n: MMNode): NodeSize {
+  const pad = paddingFor(n.depth);
+  let tw = MIN_TEXT_WIDTH;
+  let th = 20;
+  if (n.text) {
+    ea.style.fontFamily = n.text.fontFamily;
+    ea.style.fontSize = n.text.fontSize;
+    const raw: string = n.text.originalText ?? n.text.text ?? "";
+    const m = ea.measureText(raw.length ? raw : " ");
+    tw = Math.max(MIN_TEXT_WIDTH, Math.ceil(m.width));
+    th = Math.ceil(m.height);
+  }
+  return { w: tw + 2 * pad.padX, h: th + 2 * pad.padY, tw, th };
+}
+
+function textPosition(text: El, box: Box, s: NodeSize, depth: number): Vec {
+  const pad = paddingFor(depth);
+  const x =
+    text.textAlign === "left" ? box.x + pad.padX
+    : text.textAlign === "right" ? box.x + box.w - pad.padX - s.tw
+    : box.x + (box.w - s.tw) / 2;
+  const y =
+    text.verticalAlign === "top" ? box.y + pad.padY
+    : text.verticalAlign === "bottom" ? box.y + box.h - pad.padY - s.th
+    : box.y + (box.h - s.th) / 2;
+  return { x, y };
+}
+
+const sameData = (a: NodeData, b: NodeData) =>
+  a.parent === b.parent && a.side === b.side && a.order === b.order &&
+  near(a.lx, b.lx!) && near(a.ly, b.ly!) && near(a.ox ?? 0, b.ox!) && near(a.oy ?? 0, b.oy!);
+
+/** Sizes nodes to their text, positions the whole map and repairs connectors, all inside the transaction. */
+function layoutMap(tx: SceneTx, ea: any, rootId: string): MindMap | null {
+  const map = buildMap(tx.live(), rootId);
+  if (!map) return null;
+
+  const sizes = new Map<string, NodeSize>();
+  for (const n of map.nodes.values()) sizes.set(n.id, measureNode(ea, n));
+
+  const offsets = updateOffsets(map.root, (id) => {
+    const n = map.nodes.get(id)!;
+    return { x: n.el.x, y: n.el.y, lx: n.data.lx, ly: n.data.ly, ox: n.data.ox ?? 0, oy: n.data.oy ?? 0 };
+  });
+  const r = map.root.el;
+  const boxes = computeLayout(
+    map.root,
+    (id) => sizes.get(id)!,
+    (id) => offsets.get(id) ?? { x: 0, y: 0 },
+    { x: r.x + r.width / 2, y: r.y + r.height / 2 },
+  );
+
+  for (const n of map.nodes.values()) {
+    const b = boxes.get(n.id)!;
+    const s = sizes.get(n.id)!;
+    const o = offsets.get(n.id) ?? { x: 0, y: 0 };
+    const data: NodeData = { ...n.data, parent: n.parent?.id ?? null, lx: b.x, ly: b.y, ox: o.x, oy: o.y };
+    if (n.depth === 1) data.side = n.side!;
+    const geomChanged = !near(n.el.x, b.x) || !near(n.el.y, b.y) || !near(n.el.width, b.w) || !near(n.el.height, b.h);
+    if (geomChanged || !sameData(n.data, data))
+      tx.patch(n.id, { x: b.x, y: b.y, width: b.w, height: b.h, customData: { ...n.el.customData, [KEY]: data } });
+    if (n.text) {
+      const p = textPosition(n.text, b, s, n.depth);
+      const raw = n.text.originalText ?? n.text.text;
+      const t = n.text;
+      if (!near(t.x, p.x) || !near(t.y, p.y) || !near(t.width, s.tw) || !near(t.height, s.th) || t.text !== raw)
+        tx.patch(t.id, { x: p.x, y: p.y, width: s.tw, height: s.th, text: raw });
+    }
+  }
+
+  for (const n of map.nodes.values()) {
+    if (!n.parent) continue;
+    const { start, end } = edgePoints(boxes.get(n.parent.id)!, boxes.get(n.id)!, n.side as Side);
+    const edge = map.edges.get(n.id);
+    if (!edge) {
+      createEdge(tx, ea, rootId, n, start, end);
+      continue;
+    }
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const pts = edge.points as number[][] | undefined;
+    const same = near(edge.x, start.x) && near(edge.y, start.y) && pts?.length === 2 && near(pts[1][0], dx) && near(pts[1][1], dy);
+    if (!same)
+      tx.patch(edge.id, { x: start.x, y: start.y, points: [[0, 0], [dx, dy]], width: Math.abs(dx), height: Math.abs(dy) });
+  }
+  for (const e of map.strayEdges) removeEdge(tx, e);
+  return map;
+}
+
+/** Runs a mind map mutation in one transaction and one undo step. */
+function run<T>(view: ExcalidrawView, fn: (tx: SceneTx, ea: any) => T): T | null {
+  if (!view.excalidrawAPI) return null;
+  const ea = getEA(view);
+  if (!ea) {
+    new Notice("Excalidraw plugin is not available.");
+    return null;
+  }
+  try {
+    const tx = new SceneTx(view);
+    const result = fn(tx, ea);
+    tx.commit();
+    return result;
+  } finally {
+    ea.destroy?.();
+  }
+}
+
+function mapOf(tx: SceneTx, id: string): { map: MindMap; node: MMNode } | null {
+  const d = nodeData(tx.get(id));
+  if (!d) return null;
+  const map = buildMap(tx.live(), d.root);
+  const node = map?.nodes.get(id);
+  return map && node ? { map, node } : null;
+}
+
+const branchOf = (n: MMNode): Branch => ({ stroke: n.el.strokeColor, fill: n.el.backgroundColor });
+
+// ---------- operations ----------
+
+/** Scene-space bounding box of an element; lines and arrows span their points rather than x/y/width/height. */
+function boundsOf(el: El): Box {
+  const pts = el.points as number[][] | undefined;
+  if (!pts?.length) return { x: el.x, y: el.y, w: el.width, h: el.height };
+  const xs = pts.map((p) => el.x + p[0]);
+  const ys = pts.map((p) => el.y + p[1]);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+
+// Room kept free around a new central topic so its first branches don't land on existing content.
+const NEW_MAP_AREA = { w: 480, h: 160 };
+const NEW_MAP_GAP = 40;
+
+export async function newMap(view: ExcalidrawView) {
+  const id = run(view, (tx, ea) => {
+    const st = tx.api.getAppState();
+    const z = st.zoom?.value ?? 1;
+    const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
+    const obstacles = tx.live().map(boundsOf);
+    const c = findFreeSpot(visible, obstacles, NEW_MAP_AREA, NEW_MAP_GAP);
+    const id = createNode(tx, ea, {
+      depth: 0,
+      branch: branchColor(0),
+      data: { root: "", parent: null, order: 0 },
+      at: { x: c.x - 90, y: c.y - 30 },
+      fontFamily: st.currentItemFontFamily,
+      roughness: st.currentItemRoughness,
+    });
+    layoutMap(tx, ea, id);
+    return id;
+  });
+  if (id) await focusNode(view, id, true);
+}
+
+export async function addChild(view: ExcalidrawView, parentId: string) {
+  const id = run(view, (tx, ea) => {
+    const found = mapOf(tx, parentId);
+    if (!found) return null;
+    const { map, node } = found;
+    let side: Side | undefined;
+    let branch: Branch;
+    if (node.depth === 0) {
+      const right = node.children.filter((c) => c.side === "R").length;
+      side = right <= node.children.length - right ? "R" : "L";
+      branch = branchColor(node.children.length);
+    } else {
+      branch = branchOf(node);
+    }
+    const order = node.children.length ? Math.max(...node.children.map((c) => c.data.order)) + 1 : 0;
+    const id = createNode(tx, ea, {
+      depth: node.depth + 1,
+      branch,
+      data: { root: map.root.id, parent: node.id, order, ...(side ? { side } : {}) },
+      at: { x: node.el.x + node.el.width + 40, y: node.el.y },
+      fontFamily: node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily,
+      roughness: node.el.roughness,
+    });
+    layoutMap(tx, ea, map.root.id);
+    return id;
+  });
+  if (id) await focusNode(view, id, true);
+}
+
+export async function addSibling(view: ExcalidrawView, nodeId: string, above: boolean) {
+  const d = nodeData(view.excalidrawAPI?.getSceneElements().find((e) => e.id === nodeId));
+  if (!d) return;
+  if (d.parent === null) return addChild(view, nodeId); // the central topic has no siblings
+
+  const id = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found?.node.parent) return null;
+    const { map, node } = found;
+    const parent = node.parent!;
+    const sibs = parent.children.filter((c) => c.side === node.side);
+    const i = sibs.indexOf(node);
+    const neighbour = above ? sibs[i - 1] : sibs[i + 1];
+    const order = neighbour ? (node.data.order + neighbour.data.order) / 2 : node.data.order + (above ? -1 : 1);
+    const id = createNode(tx, ea, {
+      depth: node.depth,
+      branch: node.depth === 1 ? branchColor(parent.children.length) : branchOf(node),
+      data: { root: map.root.id, parent: parent.id, order, ...(node.depth === 1 ? { side: node.side as Side } : {}) },
+      at: { x: node.el.x, y: node.el.y + node.el.height + 10 },
+      fontFamily: node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily,
+      roughness: node.el.roughness,
+    });
+    layoutMap(tx, ea, map.root.id);
+    return id;
+  });
+  if (id) await focusNode(view, id, true);
+}
+
+function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
+  for (const x of subtree(node)) {
+    tx.delete(x.id);
+    if (x.text) tx.delete(x.text.id);
+    const edge = map.edges.get(x.id);
+    if (edge) removeEdge(tx, edge);
+    // Unbind other arrows that pointed at the deleted node.
+    for (const b of x.el.boundElements ?? []) {
+      const a = tx.get(b.id);
+      if (b.type !== "arrow" || !a || a.isDeleted || edgeData(a)) continue;
+      const p: Partial<El> = {};
+      if (a.startBinding?.elementId === x.id) p.startBinding = null;
+      if (a.endBinding?.elementId === x.id) p.endBinding = null;
+      tx.patch(a.id, p);
+    }
+  }
+}
+
+/** Deletes the node with its subtopics; the central topic only when allowRoot, taking the whole map with it. */
+export async function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot: boolean) {
+  const next = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found) return null;
+    const { map, node } = found;
+    if (!node.parent) {
+      if (!allowRoot) {
+        new Notice("Deleting the central topic is disabled. Enable it in the Excalidraw Mind Map settings.");
+        return null;
+      }
+      deleteSubtree(tx, map, node);
+      for (const e of map.strayEdges) removeEdge(tx, e);
+      tx.api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
+      return null;
+    }
+    const sibs = node.parent.children.filter((c) => c.side === node.side);
+    const i = sibs.indexOf(node);
+    const next = sibs[i + 1] ?? sibs[i - 1] ?? node.parent;
+    deleteSubtree(tx, map, node);
+    layoutMap(tx, ea, map.root.id);
+    return next.id;
+  });
+  if (next) await focusNode(view, next, false);
+}
+
+/** Moves the node one position up or down among its siblings on the same side, like Alt+Up/Down in XMind. */
+export async function moveNode(view: ExcalidrawView, nodeId: string, up: boolean) {
+  const moved = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found?.node.parent) return false;
+    const { map, node } = found;
+    const sibs = node.parent!.children.filter((c) => c.side === node.side);
+    const i = sibs.indexOf(node);
+    const j = up ? i - 1 : i + 1;
+    if (j < 0 || j >= sibs.length) return false;
+    [sibs[i], sibs[j]] = [sibs[j], sibs[i]];
+    // Renumber the side so equal or fractional orders can't keep the swap from taking effect.
+    sibs.forEach((s, k) => {
+      if (s.data.order !== k) tx.patch(s.id, { customData: { ...s.el.customData, [KEY]: { ...s.data, order: k } } });
+    });
+    layoutMap(tx, ea, map.root.id);
+    return true;
+  });
+  if (moved) await focusNode(view, nodeId, false);
+}
+
+export async function editNode(view: ExcalidrawView, nodeId: string) {
+  select(view, nodeId);
+  await nextFrame();
+  await startEditing(view, true);
+}
+
+export function navigate(view: ExcalidrawView, nodeId: string, dir: Direction) {
+  const api = view.excalidrawAPI;
+  if (!api) return;
+  const els = api.getSceneElements();
+  const d = nodeData(els.find((e) => e.id === nodeId));
+  const map = d ? buildMap(els, d.root) : null;
+  const n = map?.nodes.get(nodeId);
+  if (!map || !n) return;
+
+  const cy = (m: MMNode) => m.el.y + m.el.height / 2;
+  const closest = (cands: MMNode[]) =>
+    cands.reduce<MMNode | undefined>((best, c) => (!best || Math.abs(cy(c) - cy(n)) < Math.abs(cy(best) - cy(n)) ? c : best), undefined);
+
+  let target: MMNode | undefined | null;
+  if (dir === "left" || dir === "right") {
+    const side: Side = dir === "right" ? "R" : "L";
+    target = n.depth === 0 || n.side === side ? closest(n.children.filter((c) => c.side === side)) : n.parent;
+  } else if (n.depth > 0) {
+    const up = dir === "up";
+    const peers = [...map.nodes.values()].filter((m) => m !== n && m.depth === n.depth && m.side === n.side);
+    target = closest(peers.filter((m) => (up ? cy(m) < cy(n) - 1 : cy(m) > cy(n) + 1)));
+  }
+  if (target) select(view, target.id);
+}
+
+function rootsIn(els: readonly El[]): string[] {
+  return els.filter((e) => !e.isDeleted && nodeData(e)?.parent === null).map((e) => e.id);
+}
+
+/** Re-layouts the map of the given node, or every map in the drawing. */
+export function relayout(view: ExcalidrawView, nodeId?: string) {
+  run(view, (tx, ea) => {
+    const d = nodeId ? nodeData(tx.get(nodeId)) : null;
+    for (const root of d ? [d.root] : rootsIn(tx.live())) layoutMap(tx, ea, root);
+  });
+}
+
+/** Drops manual adjustments for the node's subtree, or for every map in the drawing. */
+export function resetLayout(view: ExcalidrawView, nodeId?: string) {
+  run(view, (tx, ea) => {
+    const roots: string[] = [];
+    const targets: MMNode[] = [];
+    if (nodeId) {
+      const found = mapOf(tx, nodeId);
+      if (!found) return;
+      roots.push(found.map.root.id);
+      targets.push(...subtree(found.node));
+    } else {
+      for (const r of rootsIn(tx.live())) {
+        const map = buildMap(tx.live(), r);
+        if (!map) continue;
+        roots.push(r);
+        targets.push(...map.nodes.values());
+      }
+    }
+    for (const n of targets) {
+      const { ox, oy, lx, ly, ...rest } = n.data;
+      tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: rest } });
+    }
+    for (const r of roots) layoutMap(tx, ea, r);
+  });
+}

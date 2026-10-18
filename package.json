@@ -1,0 +1,22 @@
+{
+  "name": "excalidraw-mindmap",
+  "version": "0.1.0",
+  "description": "XMind-style mind map editing inside Excalidraw drawings in Obsidian",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "test": "node --test test/*.test.ts"
+  },
+  "author": "Roman Provazník",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "builtin-modules": "^5.4.0",
+    "esbuild": "^0.28.2",
+    "obsidian": "^1.14.4",
+    "tslib": "^2.8.1",
+    "typescript": "~5.9"
+  }
+}

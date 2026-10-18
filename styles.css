@@ -1,0 +1,71 @@
+.mm-host {
+  position: relative;
+}
+
+.mm-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  /* Sits above Excalidraw's bottom row of zoom and undo controls. */
+  bottom: 60px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  max-width: calc(100% - 32px);
+  padding: 4px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.mm-panel.mm-hidden {
+  display: none;
+}
+
+.mm-group {
+  display: flex;
+  gap: 2px;
+}
+
+.mm-group + .mm-group {
+  border-left: 1px solid var(--background-modifier-border);
+  padding-left: 4px;
+}
+
+.mm-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Clear Excalidraw's bottom toolbar on phones and tablets. */
+body.is-mobile .mm-panel {
+  bottom: 72px;
+}
+
+/* Phones: Excalidraw's tool and property bars fill the bottom, so the panel docks at the top in one compact row. */
+body.is-phone .mm-panel {
+  top: 72px;
+  bottom: auto;
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 2px;
+  max-width: calc(100% - 16px);
+}
+
+body.is-phone .mm-group + .mm-group {
+  padding-left: 2px;
+}
+
+body.is-phone .mm-btn {
+  padding: 4px;
+}
+
+body.is-phone .mm-btn svg {
+  width: 18px;
+  height: 18px;
+}
