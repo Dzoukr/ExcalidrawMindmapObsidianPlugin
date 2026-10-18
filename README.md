@@ -15,11 +15,14 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | F2 / Space | Edit text |
 | Arrow keys | Move selection (right/left = child/parent, mirrored on the left side) |
 | Alt+Up / Alt+Down | Move the topic up or down among its siblings |
+| Alt+Left / Alt+Right | Promote or demote the topic (toward or away from the central topic, mirrored on the left side) |
 | Ctrl+/ (Cmd+/ on Mac) | Collapse or expand the topic |
 
 **Add summary** in the panel (or the command "Add summary to selected topics") works like XMind's Summary: select one or more sibling topics and it adds a summary topic behind a brace spanning them, and any topics between them. A summary can have its own subtopics. A sibling added to a summarized topic (Enter / Shift+Enter) joins the summary, while a topic added to the parent (Tab / Insert) stays outside it. Deleting all the topics it spans deletes the summary too.
 
 **Add boundary** (or the command "Add boundary around selected topics") draws a dashed frame with a title tab around the selected sibling topics, any topics between them, and their subtopics, like XMind's Boundary. The title is edited right away. Select the frame or its title to edit the title (Space / F2) or delete the boundary (Delete), which keeps the topics. Siblings added with Enter join the boundary, and boundaries can be nested.
+
+**Promote** (Alt+arrow toward the central topic, a panel button, or a command) makes the topic, with its subtopics, a sibling of its parent, placed right after it; a main topic can't be promoted. **Demote** (Alt+arrow away from the central topic) makes it the last subtopic of the sibling above, expanding that sibling if it's collapsed. A summary or boundary spanning only the moved topic is removed. A topic that becomes a main topic gets the next branch color and the main topic look, and one that stops being a main topic gets the subtopic look and the color of its new branch; its subtopics take the new color too. Other moves keep the styling.
 
 **Collapse** (Ctrl+/, the fold button in the panel, or the command "Collapse or expand selected topic") works as a toggle, like XMind's Collapse/Expand. On a topic it collapses the topic together with everything below it, hiding its subtopics, summaries and boundaries; the same key or button expands it all again. On the central topic, which can't be collapsed itself, it collapses or expands all main topics. A badge next to a collapsed topic shows how many topics are hidden, and clicking it expands the topic. Adding a subtopic to a collapsed topic expands it as well.
 

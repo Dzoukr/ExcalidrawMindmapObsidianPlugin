@@ -11,6 +11,8 @@ export interface PanelActions {
   remove(): void;
   nav(dir: Direction): void;
   toggleFold(): void;
+  promote(): void;
+  demote(): void;
   relayout(): void;
   reset(): void;
   togglePause(): void;
@@ -24,11 +26,13 @@ export interface PanelState {
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
   foldable: boolean; // that node can be collapsed or expanded
   collapsed: boolean; // that node is collapsed
+  promote: boolean; // that node can be promoted to its parent's level
+  demote: boolean; // that node can be demoted under the sibling above
   canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 
-type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "left" | "up" | "down" | "right" | "fold" | "layout" | "pause";
+type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "edit" | "remove" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
 
 /** Floating control bar docked at the bottom of an Excalidraw view. */
 export class FloatingPanel {
@@ -64,6 +68,9 @@ export class FloatingPanel {
     button(g3, "up", "arrow-up", "Select up", () => a.nav("up"));
     button(g3, "down", "arrow-down", "Select down", () => a.nav("down"));
     button(g3, "right", "arrow-right", "Select right", () => a.nav("right"));
+    const gl = group();
+    button(gl, "promote", "indent-decrease", "Promote to the parent's level (Alt+arrow toward the central topic)", a.promote);
+    button(gl, "demote", "indent-increase", "Demote under the topic above (Alt+arrow away from the central topic)", a.demote);
     const g4 = group();
     button(g4, "fold", "chevrons-down-up", "Collapse (Ctrl+/)", a.toggleFold);
     button(g4, "layout", "refresh-cw", "Reset layout", (b) => {
@@ -109,6 +116,8 @@ export class FloatingPanel {
     set("edit", s.node || s.boundary);
     set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary);
     set("fold", s.foldable);
+    set("promote", s.promote);
+    set("demote", s.demote);
     const fold = this.buttons.get("fold")!;
     if (fold.dataset.collapsed !== String(s.collapsed)) {
       fold.dataset.collapsed = String(s.collapsed);

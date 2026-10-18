@@ -545,7 +545,9 @@ function placeBadge(tx: SceneTx, ea: any, rootId: string, n: MMNode, box: Box, b
   const s = measureBox(ea, text, BADGE_PADDING);
   const w = Math.max(s.w, s.h);
   const x = n.side === "L" ? box.x - BADGE_GAP - w : box.x + box.w + BADGE_GAP;
-  placeBox(tx, el, text, { x, y: box.y + box.h / 2 - s.h / 2, w, h: s.h }, s, BADGE_PADDING);
+  const c = n.el.strokeColor;
+  const color = el.backgroundColor === c && el.strokeColor === c ? {} : { backgroundColor: c, strokeColor: c };
+  placeBox(tx, el, text, { x, y: box.y + box.h / 2 - s.h / 2, w, h: s.h }, s, BADGE_PADDING, color);
 }
 
 /** Runs a mind map mutation in one transaction and one undo step. */
@@ -931,6 +933,23 @@ const foldable = (n: MMNode) => (n.parent ? canFold(n) : topics(n).some(canFold)
 /** A topic is collapsed when folded; the central topic, which never folds, when all its main topics with subtopics are. */
 const collapsed = (n: MMNode) => (n.parent ? !!n.folded : topics(n).filter(canFold).every((c) => c.folded));
 
+export interface TopicState {
+  foldable: boolean; // can be collapsed or expanded
+  collapsed: boolean;
+  promote: boolean; // can be promoted to its parent's level
+  demote: boolean; // can be demoted under the sibling above
+}
+
+/** What the fold, promote and demote commands can do with the node. */
+export function topicState(view: ExcalidrawView, nodeId: string): TopicState {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const d = nodeData(els.find((e) => e.id === nodeId));
+  const n = d ? buildMap(els, d.root)?.nodes.get(nodeId) : undefined;
+  if (!n) return { foldable: false, collapsed: false, promote: false, demote: false };
+  const f = foldable(n);
+  return { foldable: f, collapsed: f && collapsed(n), promote: canPromote(n), demote: canDemote(n) };
+}
+
 /** Whether the node can be collapsed or expanded, and whether it is collapsed now. */
 export function foldState(view: ExcalidrawView, nodeId: string): { foldable: boolean; collapsed: boolean } {
   const els = view.excalidrawAPI?.getSceneElements() ?? [];
@@ -966,6 +985,97 @@ export async function unfold(view: ExcalidrawView, nodeId: string) {
     if (found) foldSubtree(tx, ea, found.map, found.node, false);
   });
   await focusNode(view, nodeId, false);
+}
+
+// ---------- promote and demote ----------
+
+/** The sibling right above the node on its side. */
+function siblingAbove(n: MMNode): MMNode | undefined {
+  const sibs = n.parent!.children.filter((c) => c.side === n.side);
+  return sibs[sibs.indexOf(n) - 1];
+}
+
+// Summaries have no siblings to move among.
+const canPromote = (n: MMNode) => !n.covers && !!n.parent?.parent;
+const canDemote = (n: MMNode) => !n.covers && !!n.parent && !!siblingAbove(n);
+
+/** Summaries and boundaries of the node's parent that span only the node go, like when it is deleted. */
+function leaveRanges(tx: SceneTx, map: MindMap, node: MMNode) {
+  const p = node.parent!;
+  for (const s of p.summaries) if (s.covers.length === 1 && s.covers[0] === node.id) deleteSubtree(tx, map, s.node);
+  for (const b of p.boundaries) if (b.covers.length === 1 && b.covers[0] === node.id) deleteBoundaryEls(tx, b);
+}
+
+/** Moves the node under a new parent; a manual offset from its old place would make no sense there. */
+function reparent(tx: SceneTx, node: MMNode, parent: MMNode, order: number, side?: Side) {
+  const { side: _, ox, oy, lx, ly, ...rest } = node.data;
+  tx.patch(node.id, { customData: { ...node.el.customData, [KEY]: { ...rest, parent: parent.id, order, ...(side ? { side } : {}) } } });
+}
+
+/** Gives a topic that crossed the main-topic line the look of its new level, and its subtree that branch's color. */
+function restyle(tx: SceneTx, map: MindMap, node: MMNode, depth: number, branch: Branch) {
+  const st = styleFor(depth, branch);
+  tx.patch(node.id, { strokeColor: st.borderColor, backgroundColor: st.backgroundColor, strokeWidth: st.strokeWidth });
+  if (node.text) tx.patch(node.text.id, { fontSize: st.fontSize, strokeColor: st.textColor });
+  for (const x of subtree(node)) {
+    if (x === node) continue;
+    if (!x.data.summary) tx.patch(x.id, { strokeColor: branch.stroke }); // summaries keep their own colors
+    const edge = map.edges.get(x.id);
+    if (edge) tx.patch(edge.id, { strokeColor: branch.stroke });
+  }
+}
+
+/** Makes the topic, with its subtree, a sibling of its parent, right after it. A main topic stays where it is. */
+export async function promote(view: ExcalidrawView, nodeId: string) {
+  const done = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found || !canPromote(found.node)) return false;
+    const { map, node } = found;
+    const parent = node.parent!;
+    const target = parent.parent!;
+    // Under a summary, the topic lands after the last topic the summary spans.
+    const anchor = parent.covers ? map.nodes.get(parent.covers[parent.covers.length - 1])! : parent;
+    const sibs = target.children.filter((c) => c.side === anchor.side);
+    const next = sibs[sibs.indexOf(anchor) + 1];
+    const order = next ? (anchor.data.order + next.data.order) / 2 : anchor.data.order + 1;
+    leaveRanges(tx, map, node);
+    if (target === map.root) {
+      reparent(tx, node, target, order, anchor.side as Side);
+      restyle(tx, map, node, 1, branchColor(target.children.length));
+    } else {
+      reparent(tx, node, target, order);
+    }
+    layoutMap(tx, ea, map.root.id);
+    return true;
+  });
+  if (done) await focusNode(view, nodeId, false);
+}
+
+/** Makes the topic, with its subtree, the last subtopic of the sibling above it. */
+export async function demote(view: ExcalidrawView, nodeId: string) {
+  const done = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found || !canDemote(found.node)) return false;
+    const { map, node } = found;
+    const target = siblingAbove(node)!;
+    const order = target.children.length ? Math.max(...target.children.map((c) => c.data.order)) + 1 : 0;
+    leaveRanges(tx, map, node);
+    setFolded(tx, target, false); // keep the moved topic in view
+    reparent(tx, node, target, order);
+    if (node.depth === 1) restyle(tx, map, node, 2, branchOf(target));
+    layoutMap(tx, ea, map.root.id);
+    return true;
+  });
+  if (done) await focusNode(view, nodeId, false);
+}
+
+/** Alt+Left/Right: away from the central topic demotes, toward it promotes, so the left side is mirrored. */
+export function changeLevel(view: ExcalidrawView, nodeId: string, dir: "left" | "right") {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const d = nodeData(els.find((e) => e.id === nodeId));
+  const side = d ? buildMap(els, d.root)?.nodes.get(nodeId)?.side : null;
+  if (!side) return;
+  return (side === "R") === (dir === "right") ? demote(view, nodeId) : promote(view, nodeId);
 }
 
 function rootsIn(els: readonly El[]): string[] {

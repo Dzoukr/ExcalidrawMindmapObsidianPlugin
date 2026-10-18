@@ -1,8 +1,8 @@
 import { App, ItemView, Platform, Plugin, PluginSettingTab, Scope, Setting } from "obsidian";
 import {
-  Direction, addBoundary, addChild, addSibling, addSummary, areSiblingTopics, commitEditing, deleteBoundary, deleteNode,
-  editBoundaryTitle, editNode, editingNode, editingTitle, foldState, moveNode, navigate, newMap, relayout, resetLayout, selectedBadge,
-  selectedBoundary, selectedNode, selectedNodes, toggleFold, unfold,
+  Direction, addBoundary, addChild, changeLevel, demote, promote, addSibling, addSummary, areSiblingTopics, commitEditing, deleteBoundary, deleteNode,
+  editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap, relayout, resetLayout, selectedBadge,
+  selectedBoundary, selectedNode, selectedNodes, toggleFold, topicState, unfold,
 } from "./actions";
 import { El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { nodeData, titleData } from "./model";
@@ -111,6 +111,16 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "toggle-fold",
       name: "Collapse or expand selected topic",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => toggleFold(v, id))),
+    });
+    this.addCommand({
+      id: "promote",
+      name: "Promote selected topic to its parent's level",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => promote(v, id))),
+    });
+    this.addCommand({
+      id: "demote",
+      name: "Demote selected topic under the topic above",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => demote(v, id))),
     });
     this.addCommand({
       id: "relayout",
@@ -263,15 +273,14 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const editing = editingNode(s.view);
     const selected = editing ? [editing] : selectedNodes(s.view);
     const node = selected.length === 1 ? selected[0] : null;
-    const fold = node ? foldState(s.view, node.id) : { foldable: false, collapsed: false };
+    const t = node ? topicState(s.view, node.id) : { foldable: false, collapsed: false, promote: false, demote: false };
     s.panel.update({
       node: !!node,
       root: !!node && nodeData(node)?.parent === null,
       summary: !!node && !!nodeData(node)?.summary,
       siblings: areSiblingTopics(selected),
       boundary: !editing && !!selectedBoundary(s.view),
-      foldable: fold.foldable,
-      collapsed: fold.collapsed,
+      ...t,
       canDeleteRoot: this.settings.allowDeleteCentralTopic,
       paused: this.paused,
     });
@@ -333,6 +342,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       remove: () => this.remove(view),
       nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
+      promote: () => this.runOnNode(view, (id) => promote(view, id)),
+      demote: () => this.runOnNode(view, (id) => demote(view, id)),
       relayout: () => relayout(view, selectedNode(view)?.id),
       reset: () => resetLayout(view, selectedNode(view)?.id),
       togglePause: () => this.togglePause(),
@@ -350,11 +361,13 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const appState = view.excalidrawAPI!.getAppState();
     if (appState.viewModeEnabled) return;
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
-    // XMind's Alt+Up/Down reorders the topic among its siblings.
-    const reorder = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown");
+    // XMind's Alt+Up/Down reorders the topic among its siblings, Alt+Left/Right promotes or demotes it.
+    const alt = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+    const reorder = alt && (e.key === "ArrowUp" || e.key === "ArrowDown");
+    const level = alt && (e.key === "ArrowLeft" || e.key === "ArrowRight");
     // XMind's Ctrl+/ (Cmd+/ on Mac) collapses or expands the topic; the physical key also counts on other keyboard layouts.
     const fold = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "/" || e.code === "Slash");
-    if (!plain && !reorder && !fold) return;
+    if (!plain && !reorder && !level && !fold) return;
 
     let action: ((id: string) => unknown) | null = null;
 
@@ -366,6 +379,10 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       if (appState.editingTextElement || !selectedNode(view)) return;
       if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       action = (id) => moveNode(view, id, e.key === "ArrowUp");
+    } else if (level) {
+      if (appState.editingTextElement || !selectedNode(view)) return;
+      if (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      action = (id) => changeLevel(view, id, e.key === "ArrowRight" ? "right" : "left");
     } else if (appState.editingTextElement) {
       if (editingTitle(view)) {
         // Enter commits a boundary title.
