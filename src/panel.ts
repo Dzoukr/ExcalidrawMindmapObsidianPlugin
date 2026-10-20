@@ -1,5 +1,4 @@
 import { Menu, setIcon } from "obsidian";
-import { Direction } from "./actions";
 import { STRUCTURES, Structure } from "./model";
 
 export interface PanelActions {
@@ -11,7 +10,6 @@ export interface PanelActions {
   addRelationship: () => void;
   edit: () => void;
   remove: () => void;
-  nav: (dir: Direction) => void;
   toggleFold: () => void;
   copy: () => void;
   paste: () => void;
@@ -42,16 +40,29 @@ export interface PanelState {
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 
-type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "edit" | "remove" | "copy" | "paste" | "duplicate" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
+/** Where the panel is docked: a row at the bottom or top of the canvas, or a column on its left or right side. */
+export type PanelPosition = "bottom" | "top" | "left" | "right";
 
-/** Floating control bar docked at the bottom of an Excalidraw view. */
+export const PANEL_POSITIONS: Record<PanelPosition, string> = { bottom: "Bottom", top: "Top", left: "Left side", right: "Right side" };
+
+export const isPanelPosition = (p: unknown): p is PanelPosition => typeof p === "string" && Object.prototype.hasOwnProperty.call(PANEL_POSITIONS, p);
+
+type Key =
+  | "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "edit" | "remove"
+  | "copy" | "paste" | "duplicate" | "promote" | "demote" | "fold" | "layout" | "pause" | "more";
+
+/**
+ * Floating control bar docked on an Excalidraw view. On desktop every action has its button; on phones and tablets
+ * the bar keeps the ones that build the map and the rest are in its ⋯ menu, so it fits a narrow screen.
+ */
 export class FloatingPanel {
   readonly el: HTMLElement;
   private readonly buttons = new Map<Key, HTMLButtonElement>();
-  private layout: PanelState["layout"] = null;
+  private state: PanelState | null = null;
+  private position: PanelPosition = "bottom";
 
-  constructor(a: PanelActions) {
-    this.el = createDiv({ cls: "mm-panel" });
+  constructor(private readonly a: PanelActions, compact: boolean) {
+    this.el = createDiv({ cls: "mm-panel mm-pos-bottom" });
     const group = () => this.el.createDiv({ cls: "mm-group" });
     const button = (g: HTMLElement, key: Key, icon: string, label: string, fn: (b: HTMLButtonElement) => void) => {
       const b = g.createEl("button", { cls: "mm-btn clickable-icon", attr: { "aria-label": label } });
@@ -75,15 +86,14 @@ export class FloatingPanel {
     button(g2, "relation", "spline", "Add relationship from the first to the second selected topic or boundary", a.addRelationship);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
+    if (compact) {
+      button(group(), "more", "more-horizontal", "More", (b) => this.showMenu(this.moreMenu(), b));
+      return;
+    }
     const gc = group();
     button(gc, "copy", "copy", "Copy as Markdown (Ctrl+C)", a.copy);
     button(gc, "paste", "clipboard-paste", "Paste Markdown as subtopics (Ctrl+V), or as a new map with nothing selected", a.paste);
     button(gc, "duplicate", "copy-plus", "Duplicate with subtopics (Ctrl+D)", a.duplicate);
-    const g3 = group();
-    button(g3, "left", "arrow-left", "Select left", () => a.nav("left"));
-    button(g3, "up", "arrow-up", "Select up", () => a.nav("up"));
-    button(g3, "down", "arrow-down", "Select down", () => a.nav("down"));
-    button(g3, "right", "arrow-right", "Select right", () => a.nav("right"));
     const gl = group();
     button(gl, "promote", "indent-decrease", "Promote to the parent's level (Alt+arrow toward the central topic)", a.promote);
     button(gl, "demote", "indent-increase", "Demote under the topic above (Alt+arrow away from the central topic)", a.demote);
@@ -91,22 +101,49 @@ export class FloatingPanel {
     button(g4, "fold", "chevrons-down-up", "Collapse (Ctrl+/)", a.toggleFold);
     button(g4, "layout", "sliders-horizontal", "Layout settings", (b) => {
       const menu = new Menu();
-      const l = this.layout;
-      menu.addItem((i) => i.setTitle(l ? "Structure" : "Structure (select a topic of the map)").setIsLabel(true));
-      for (const [s, name] of Object.entries(STRUCTURES) as [Structure, string][])
-        menu.addItem((i) => i.setTitle(name).setChecked(l?.structure === s).setDisabled(!l).onClick(() => a.setStructure(s)));
-      menu.addSeparator();
-      menu.addItem((i) => i.setTitle("Auto-align").setChecked(!!l?.autoAlign).setDisabled(!l).onClick(a.toggleAutoAlign));
-      menu.addSeparator();
-      menu.addItem((i) =>
-        i.setTitle("Reset layout").setIcon("rotate-ccw").setDisabled(!!l?.autoAlign).onClick(a.reset),
-      );
-      menu.addItem((i) => i.setTitle("Reset all").setIcon("eraser").onClick(a.resetAll));
-      const r = b.getBoundingClientRect();
-      menu.showAtPosition({ x: r.left, y: r.top }, b.doc);
+      this.layoutItems(menu);
+      this.showMenu(menu, b);
     });
-    const g5 = group();
-    button(g5, "pause", "pause", "", a.togglePause);
+    button(group(), "pause", "pause", "", a.togglePause);
+  }
+
+  /** Structure, auto-align and the resets of the selected topic's map. */
+  private layoutItems(menu: Menu) {
+    const a = this.a;
+    const l = this.state?.layout ?? null;
+    menu.addItem((i) => i.setTitle(l ? "Structure" : "Structure (select a topic of the map)").setIsLabel(true));
+    for (const [s, name] of Object.entries(STRUCTURES) as [Structure, string][])
+      menu.addItem((i) => i.setTitle(name).setChecked(l?.structure === s).setDisabled(!l).onClick(() => a.setStructure(s)));
+    menu.addSeparator();
+    menu.addItem((i) => i.setTitle("Auto-align").setChecked(!!l?.autoAlign).setDisabled(!l).onClick(a.toggleAutoAlign));
+    menu.addSeparator();
+    menu.addItem((i) => i.setTitle("Reset layout").setIcon("rotate-ccw").setDisabled(!!l?.autoAlign).onClick(a.reset));
+    menu.addItem((i) => i.setTitle("Reset all").setIcon("eraser").onClick(a.resetAll));
+  }
+
+  /** The ⋯ menu of the compact bar: clipboard, levels, collapse, layout and pause. Paused, only Resume. */
+  private moreMenu(): Menu {
+    const a = this.a;
+    const menu = new Menu();
+    const s = this.state;
+    const item = (title: string, icon: string, enabled: boolean, fn: () => void) =>
+      menu.addItem((i) => i.setTitle(title).setIcon(icon).setDisabled(!enabled).onClick(fn));
+    if (s?.paused) {
+      item("Resume mind map editing", "play", true, a.togglePause);
+      return menu;
+    }
+    item("Copy as Markdown", "copy", !!s?.topics, a.copy);
+    item(s?.node ? "Paste Markdown as subtopics" : "Paste Markdown as a new map", "clipboard-paste", true, a.paste);
+    item("Duplicate with subtopics", "copy-plus", !!s && (s.topics || s.node) && !s.summary, a.duplicate);
+    menu.addSeparator();
+    item("Promote to the parent's level", "indent-decrease", !!s?.promote, a.promote);
+    item("Demote under the topic above", "indent-increase", !!s?.demote, a.demote);
+    item(s?.collapsed ? "Expand" : "Collapse", s?.collapsed ? "chevrons-up-down" : "chevrons-down-up", !!s?.foldable, a.toggleFold);
+    menu.addSeparator();
+    this.layoutItems(menu);
+    menu.addSeparator();
+    item("Pause mind map editing (use Excalidraw's own shortcuts)", "pause", true, a.togglePause);
+    return menu;
   }
 
   mount(parent: HTMLElement) {
@@ -115,47 +152,63 @@ export class FloatingPanel {
     if (this.el.parentElement !== parent) parent.appendChild(this.el);
   }
 
+  setPosition(p: PanelPosition) {
+    if (p === this.position && this.el.hasClass(`mm-pos-${p}`)) return;
+    this.el.removeClass(`mm-pos-${this.position}`);
+    this.el.addClass(`mm-pos-${p}`);
+    this.position = p;
+  }
+
+  /** Opens the menu from the button, toward the canvas rather than off the edge the panel is docked on. */
+  private showMenu(menu: Menu, b: HTMLElement) {
+    const r = b.getBoundingClientRect();
+    if (this.position === "top") menu.showAtPosition({ x: r.left, y: r.bottom }, b.doc);
+    else if (this.position === "bottom") menu.showAtPosition({ x: r.left, y: r.top }, b.doc);
+    else menu.showAtPosition({ x: r.left, y: r.top, width: r.width, left: this.position === "right" }, b.doc);
+  }
+
   setVisible(visible: boolean) {
     this.el.toggleClass("mm-hidden", !visible);
   }
 
   update(s: PanelState) {
-    const pause = this.buttons.get("pause")!;
-    if (pause.hasClass("is-active") !== s.paused) {
-      setIcon(pause, s.paused ? "play" : "pause");
-      pause.toggleClass("is-active", s.paused);
-    }
-    pause.setAttr("aria-label", s.paused ? "Resume mind map editing" : "Pause mind map editing (use Excalidraw's own shortcuts)");
+    this.state = s;
+    // Paused, only the button that resumes works: the pause button, or the ⋯ menu holding Resume.
+    // It stays lit so it is obvious how to resume.
+    const pause = this.buttons.get("pause");
+    const resume = pause ?? this.buttons.get("more")!;
+    if (pause && pause.hasClass("is-active") !== s.paused) setIcon(pause, s.paused ? "play" : "pause");
+    resume.toggleClass("is-active", s.paused);
+    if (pause) pause.setAttr("aria-label", s.paused ? "Resume mind map editing" : "Pause mind map editing (use Excalidraw's own shortcuts)");
+    else resume.setAttr("aria-label", s.paused ? "Resume mind map editing" : "More");
     this.el.toggleClass("mm-paused", s.paused);
     if (s.paused) {
-      for (const [k, b] of this.buttons) b.disabled = k !== "pause";
+      for (const b of this.buttons.values()) b.disabled = b !== resume;
       return;
     }
-    this.layout = s.layout;
-    const set = (k: Key, enabled: boolean) => (this.buttons.get(k)!.disabled = !enabled);
-    set("newMap", true);
-    set("layout", true);
-    for (const k of ["child", "edit", "left", "up", "down", "right"] as Key[]) set(k, s.node);
+    const set = (k: Key, enabled: boolean) => {
+      const b = this.buttons.get(k);
+      if (b) b.disabled = !enabled;
+    };
+    for (const k of ["newMap", "paste", "layout", "pause", "more"] as Key[]) set(k, true);
+    set("child", s.node);
     set("sibling", s.node && !s.root && !s.summary);
     set("summary", s.siblings);
     set("boundary", s.siblings);
     set("relation", s.pair);
     set("edit", s.node || s.boundary);
     set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary);
-    set("fold", s.foldable);
     set("copy", s.topics);
-    set("paste", true);
     set("duplicate", (s.topics || s.node) && !s.summary);
     set("promote", s.promote);
     set("demote", s.demote);
-    const fold = this.buttons.get("fold")!;
-    if (fold.dataset.collapsed !== String(s.collapsed)) {
+    set("fold", s.foldable);
+    const fold = this.buttons.get("fold");
+    if (fold && fold.dataset.collapsed !== String(s.collapsed)) {
       fold.dataset.collapsed = String(s.collapsed);
       setIcon(fold, s.collapsed ? "chevrons-up-down" : "chevrons-down-up");
       fold.setAttr("aria-label", s.collapsed ? "Expand (Ctrl+/)" : "Collapse (Ctrl+/)");
     }
-    set("up", s.node && !s.root);
-    set("down", s.node && !s.root);
   }
 
   destroy() {

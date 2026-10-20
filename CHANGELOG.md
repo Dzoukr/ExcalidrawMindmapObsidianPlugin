@@ -5,6 +5,12 @@
 ### New
 
 - **Duplicate (Ctrl+D, Cmd+D on Mac)** copies the selected topics with everything under them, right below the original: subtopics, summaries, boundaries, colors and collapsed topics. The copy joins the boundaries and summaries the original is in. On the central topic, it duplicates the whole map next to it. Relationships stay with the original. Also in the panel and the command palette.
+- **Control panel position.** Dock the panel as a row at the bottom or top of the drawing, or as a column on its left or right side, in the settings. Its menus open toward the drawing.
+
+### Changed
+
+- A narrower panel on phones and tablets, to fit the screen: the bar keeps New mind map and the buttons that add, edit and delete topics, summaries, boundaries and relationships. Copy, paste, duplicate, promote, demote, collapse, the layout settings and pause are in its **⋯** menu. On desktop every button stays in the bar.
+- The four selection arrow buttons are gone from the panel; tap a topic to select it, or use the arrow keys.
 
 ## 1.3.0
 

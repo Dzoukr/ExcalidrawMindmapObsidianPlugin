@@ -8,11 +8,12 @@ import {
 import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { STRUCTURES, Structure, isStructure, nodeData, titleData } from "./model";
 import { isOutline } from "./outline";
-import { FloatingPanel, PanelActions } from "./panel";
+import { FloatingPanel, PANEL_POSITIONS, PanelActions, PanelPosition, isPanelPosition } from "./panel";
 import { Colors, DEFAULT_COLORS, setArrows, setColors, setMapDefaults } from "./styles";
 
 interface Settings {
   showPanelOnDesktop: boolean;
+  panelPosition: PanelPosition;
   allowDeleteCentralTopic: boolean;
   arrows: boolean; // connectors end in an arrowhead instead of a plain line
   structure: Structure; // of new maps
@@ -21,7 +22,7 @@ interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  showPanelOnDesktop: true, allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true, colors: DEFAULT_COLORS,
+  showPanelOnDesktop: true, panelPosition: "bottom", allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true, colors: DEFAULT_COLORS,
 };
 
 /** Saved settings over the defaults; colors are merged per field so new color options get their default. */
@@ -40,6 +41,7 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
   });
   const merged = { ...DEFAULT_SETTINGS, ...saved, colors };
   if (!isStructure(merged.structure)) merged.structure = DEFAULT_SETTINGS.structure;
+  if (!isPanelPosition(merged.panelPosition)) merged.panelPosition = DEFAULT_SETTINGS.panelPosition;
   return merged;
 }
 
@@ -277,7 +279,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (existing) this.detach(existing);
 
     const s: ViewState = {
-      view, api, panel: new FloatingPanel(this.panelActions(view)), editing: null, pending: null, raf: 0, badge: null,
+      view, api, panel: new FloatingPanel(this.panelActions(view), Platform.isMobile), editing: null, pending: null, raf: 0, badge: null,
       drop: createDiv({ cls: "mm-drop-target mm-hidden" }),
     };
     s.panel.mount(view.contentEl);
@@ -355,6 +357,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (s.view === this.activeView()) this.syncKeyScope();
     const visible = (Platform.isMobile || this.settings.showPanelOnDesktop) && !s.api.getAppState().viewModeEnabled;
     s.panel.setVisible(visible);
+    s.panel.setPosition(this.settings.panelPosition);
     if (!visible) return;
     const editing = editingNode(s.view);
     const selected = editing ? [editing] : selectedNodes(s.view);
@@ -532,7 +535,6 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       addRelationship: () => this.relate(view),
       edit: () => void this.edit(view),
       remove: () => void this.remove(view),
-      nav: (dir) => this.runOnNode(view, (id) => navigate(view, id, dir)),
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
       copy: () => void this.copyCommand(view),
       paste: () => void this.paste(view),
@@ -727,6 +729,11 @@ class MindMapSettingTab extends PluginSettingTab {
         name: "Show control panel on desktop",
         desc: "The floating panel is always shown on mobile.",
         control: { type: "toggle", key: "showPanelOnDesktop" },
+      },
+      {
+        name: "Control panel position",
+        desc: "A row at the bottom or top of the drawing, or a column on its left or right side. On phones, where Excalidraw's own toolbars take the bottom, Bottom shows it at the top.",
+        control: { type: "dropdown", key: "panelPosition", options: PANEL_POSITIONS },
       },
       {
         name: "Allow deleting the central topic",

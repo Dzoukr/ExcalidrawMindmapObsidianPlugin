@@ -4,18 +4,9 @@
 
 .mm-panel {
   position: absolute;
-  left: 0;
-  right: 0;
-  margin-inline: auto;
-  width: fit-content;
-  /* Sits above Excalidraw's bottom row of zoom and undo controls. */
-  bottom: 60px;
   z-index: 3;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
   gap: 4px;
-  max-width: calc(100% - 32px);
   padding: 4px;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
@@ -25,6 +16,48 @@
 
 .mm-panel.mm-hidden {
   display: none;
+}
+
+/* Docked at the bottom or top: a centered row, wrapping when it doesn't fit. */
+.mm-panel.mm-pos-bottom,
+.mm-panel.mm-pos-top {
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Sits above Excalidraw's bottom row of zoom and undo controls. */
+.mm-panel.mm-pos-bottom {
+  bottom: 60px;
+}
+
+/* Below Excalidraw's tool bar. */
+.mm-panel.mm-pos-top {
+  top: 72px;
+}
+
+/* Docked on a side: a vertically centered column, scrolling when it doesn't fit. */
+.mm-panel.mm-pos-left,
+.mm-panel.mm-pos-right {
+  top: 0;
+  bottom: 0;
+  margin-block: auto;
+  height: fit-content;
+  max-height: calc(100% - 32px);
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.mm-panel.mm-pos-left {
+  left: 16px;
+}
+
+.mm-panel.mm-pos-right {
+  right: 16px;
 }
 
 .mm-group {
@@ -37,7 +70,20 @@
   padding-left: 4px;
 }
 
-/* Paused: the pause button stays lit so it is obvious how to resume. */
+.mm-pos-left .mm-group,
+.mm-pos-right .mm-group {
+  flex-direction: column;
+}
+
+.mm-pos-left .mm-group + .mm-group,
+.mm-pos-right .mm-group + .mm-group {
+  border-left: none;
+  padding-left: 0;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 4px;
+}
+
+/* Paused: the button that resumes (pause, or the more menu on phones and tablets) stays lit. */
 .mm-panel.mm-paused .mm-btn.is-active {
   color: var(--text-on-accent);
   background-color: var(--interactive-accent);
@@ -49,29 +95,42 @@
 }
 
 /* Clear Excalidraw's bottom toolbar on phones and tablets. */
-body.is-mobile .mm-panel {
+body.is-mobile .mm-panel.mm-pos-bottom {
   bottom: 72px;
 }
 
-/* Phones: Excalidraw's tool and property bars fill the bottom, so the panel docks at the top in one compact row. */
-body.is-phone .mm-panel {
+/* Phones: Excalidraw's tool and property bars fill the bottom, so a bottom panel docks at the top. A row is one
+   compact line that scrolls sideways when there are more buttons than fit. */
+body.is-phone .mm-panel.mm-pos-bottom {
   top: 72px;
   bottom: auto;
+}
+
+body.is-phone .mm-panel.mm-pos-bottom,
+body.is-phone .mm-panel.mm-pos-top {
   flex-wrap: nowrap;
-  gap: 2px;
-  padding: 2px;
   max-width: calc(100% - 16px);
-  /* More buttons than fit a narrow phone: the row scrolls sideways. */
   overflow-x: auto;
   justify-content: flex-start;
+}
+
+body.is-phone .mm-panel {
+  gap: 2px;
+  padding: 2px;
 }
 
 body.is-phone .mm-group {
   flex-shrink: 0;
 }
 
-body.is-phone .mm-group + .mm-group {
+body.is-phone .mm-pos-bottom .mm-group + .mm-group,
+body.is-phone .mm-pos-top .mm-group + .mm-group {
   padding-left: 2px;
+}
+
+body.is-phone .mm-pos-left .mm-group + .mm-group,
+body.is-phone .mm-pos-right .mm-group + .mm-group {
+  padding-top: 2px;
 }
 
 body.is-phone .mm-btn {

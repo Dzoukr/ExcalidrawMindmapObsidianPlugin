@@ -31,7 +31,7 @@ Build a whole map without touching the mouse, with the shortcuts you know from X
 
 ### 📐 Automatic layout
 
-The map re-arranges itself after every change, and after every drop: subtopics always follow their topic. The **Layout settings** button in the panel sets the map's structure and auto-align, and resets the layout or, with **Reset all**, the whole map.
+The map re-arranges itself after every change, and after every drop: subtopics always follow their topic. The **Layout settings** button in the panel (in its **⋯** menu on phones and tablets) sets the map's structure and auto-align, and resets the layout or, with **Reset all**, the whole map.
 
 With **Auto-align** on, every topic keeps its automatic place, evenly spaced. Dropping a topic moves it among its siblings by the height you drop it at. With it off, a dropped topic stays where you put it, until you reset the layout. Each map has its own; new maps take the default from the settings, and maps made before version 1.2 have it off.
 
@@ -73,7 +73,7 @@ Pick the colors of the central topic, branches, summaries, boundaries and relati
 
 ### 📱 Works on mobile
 
-A floating panel at the bottom of the drawing offers every action. On phones and tablets you can build maps without a keyboard.
+A floating panel offers every action. On phones and tablets it keeps the buttons that add, edit and delete topics, summaries, boundaries and relationships, and puts the rest in its **⋯** menu so it fits the screen. You can build maps without a keyboard.
 
 ### ✏️ Still plain Excalidraw
 
@@ -86,6 +86,7 @@ All options are in **Settings → Excalidraw Mind Map**.
 | Setting | Default | Description |
 |---|---|---|
 | Show control panel on desktop | On | Shows the floating panel on desktop. On phones and tablets it is always shown. |
+| Control panel position | Bottom | A row at the bottom or top of the drawing, or a column on its left or right side. On phones, Bottom shows it at the top, clear of Excalidraw's own toolbars. |
 | Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. A central topic with no other topics can be deleted either way. |
 | Structure of new maps | Balanced | How main topics are placed around the central topic: balanced, free, right or left. Each map keeps its own. |
 | Auto-align new maps | On | Topics keep their automatic places and a drop moves a topic among its siblings, instead of leaving it where it is dropped. Each map keeps its own. |
