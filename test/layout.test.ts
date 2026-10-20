@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LNode, PlacedInfo } from "../src/layout.ts";
-import { BOUNDARY_PAD, BRACE_GAP, BRACE_W, RELATION_GAP, ROOT_H_GAP, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, findFreeSpot, relationBend, relationPoints, updateOffsets } from "../src/layout.ts";
+import { BOUNDARY_PAD, BRACE_GAP, BRACE_W, RELATION_GAP, ROOT_H_GAP, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, dropsOnto, findFreeSpot, relationBend, relationPoints, updateOffsets } from "../src/layout.ts";
 
 const node = (id: string, side: "R" | "L" | null, children: LNode[] = []): LNode => ({ id, side, children });
 const size = () => ({ w: 100, h: 40 });
@@ -168,4 +168,15 @@ test("the bend read back from a drawn relationship matches the one it was drawn 
   const bend = relationBend([[0, 0], [mid.x - start.x, mid.y - start.y], [end.x - start.x, end.y - start.y]])!;
   assert.ok(Math.abs(bend - 0.3) < 1e-9);
   assert.equal(relationBend([[0, 0], [10, 10]]), null);
+});
+
+test("a topic dropped on the middle half of a box lands on it, nearer its edges between it and its neighbour", () => {
+  const b = { x: 0, y: 0, w: 100, h: 40 };
+  assert.equal(dropsOnto({ x: 50, y: 20 }, b), true);
+  assert.equal(dropsOnto({ x: 0, y: 10 }, b), true);
+  assert.equal(dropsOnto({ x: 100, y: 30 }, b), true);
+  assert.equal(dropsOnto({ x: 50, y: 9 }, b), false);
+  assert.equal(dropsOnto({ x: 50, y: 31 }, b), false);
+  assert.equal(dropsOnto({ x: -1, y: 20 }, b), false);
+  assert.equal(dropsOnto({ x: 101, y: 20 }, b), false);
 });

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0
+
+### New
+
+- **Drag a topic onto another topic** to make it a subtopic there, with its subtopics. The topic it will land on is outlined while dragging; dropped near a topic's top or bottom edge, it goes between topics as before. Dropped on the central topic, it becomes a main topic on that side. It leaves the boundaries and summaries it was in and takes the colors of its new branch.
+- **Drop between maps.** Drop a topic on a topic of another map to move it, with its subtopics, boundaries and summaries, into that map. Drag a map's central topic onto another map's topic to make the whole map a branch there: its main topics become subtopics and take the look of their new level. Relationships stay connected.
+
+### Changed
+
+- A central topic with no other topics can be deleted even when deleting the central topic is off in the settings. Deleting a whole selected map still needs the setting.
+
 ## 1.2.0
 
 ### New

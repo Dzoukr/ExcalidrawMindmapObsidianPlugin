@@ -1,7 +1,7 @@
 import { Notice } from "obsidian";
 import { Binding, El, ExcalidrawAutomate, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import {
-  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
+  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, computeLayout, dropsOnto, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
 } from "./layout";
 import {
   HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMNode, MMSummary, MindMap, NodeData, RelationData, Structure, badgeData, balancedSplit, byOrder, boundTextId, boundaryData, braceData,
@@ -497,10 +497,14 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
   // What the user did by dragging since the last layout, a step at a time on the map as the step before left it.
   // Topics that left or joined a boundary or summary, or changed sides, are kept where they were dropped.
   const dropped = new Set<string>();
-  for (const step of [moveBoundaries, fitBoundaries, leaveBoundaries, leaveSummaries, crossSides, joinBoundaries, joinSummaries, reorderDropped]) {
+  const reparent = (t: SceneTx, mm: MindMap) => reparentDropped(t, ea, mm);
+  for (const step of [reparent, moveBoundaries, fitBoundaries, leaveBoundaries, leaveSummaries, crossSides, joinBoundaries, joinSummaries, reorderDropped]) {
     const rev = tx.revision;
     for (const id of step(tx, m) ?? []) dropped.add(id);
-    if (tx.revision !== rev) m = buildMap(tx.live(), rootId)!;
+    if (tx.revision === rev) continue;
+    const next = buildMap(tx.live(), rootId);
+    if (!next) return null; // its central topic was dropped into another map
+    m = next;
   }
   const map = m;
   const aligned = autoAligned(map.root.data);
@@ -710,6 +714,26 @@ export function afterDrag(view: ExcalidrawView) {
   }
 }
 
+/** While topics are dragged, the box of the topic they become subtopics of if dropped now; null when none. */
+export function dropTargetBox(view: ExcalidrawView): Box | null {
+  const api = view.excalidrawAPI;
+  if (!api) return null;
+  const els = api.getSceneElements();
+  const byId = new Map(els.map((e) => [e.id, e]));
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const roots = new Set<string>();
+  for (const id of Object.keys(sel).filter((k) => sel[k])) {
+    const r = rootIdOf(resolveNodeElement(byId.get(id), byId));
+    if (r) roots.add(r);
+  }
+  for (const r of roots) {
+    const map = buildMap(els, r);
+    const found = map && dropTarget(els, map);
+    if (found) return boxOf(found.target.el);
+  }
+  return null;
+}
+
 /** How far the user moved the boundary's frame since the last layout, without resizing it; null when not. */
 function shifted(b: MMBoundary): Vec | null {
   const d = boundaryData(b.el)!;
@@ -819,6 +843,138 @@ function dragged(n: MMNode): boolean {
   const own = shiftOf(n.el, n.data);
   const base = (n.parent && shiftOf(n.parent.el, n.parent.data)) ?? { x: 0, y: 0 };
   return !!own && isMove({ x: own.x - base.x, y: own.y - base.y });
+}
+
+interface Drop {
+  nodes: MMNode[]; // dropped, with their subtopics, top-level ones only
+  target: MMNode;
+  into: MindMap; // the target's map
+  at: Vec; // middle of the topic that landed on the target
+}
+
+/**
+ * A topic dragged onto a topic of any map in the drawing, not its parent or one under it: the topic under its
+ * middle, the nearest of them. A central topic dragged onto another map's topic brings its whole map. The topics
+ * dragged along with it go too, except those already under that topic or above it, and those under another one going.
+ */
+function dropTarget(els: readonly El[], map: MindMap): Drop | null {
+  const drag = [...map.nodes.values()].filter((n) => !n.covers && !isHidden(n) && dragged(n));
+  if (!drag.length) return null;
+  const maps = [map, ...rootsIn(els).filter((r) => r !== map.root.id).map((r) => buildMap(els, r)).filter((m): m is MindMap => !!m)];
+  const targets = maps.flatMap((m) => [...m.nodes.values()].filter((t) => !isHidden(t) && !drag.includes(t)).map((t) => ({ t, m })));
+  const dist = (t: MMNode, at: Vec) => { const c = middle(t.el); return Math.hypot(c.x - at.x, c.y - at.y); };
+  for (const n of drag) {
+    const at = middle(n.el);
+    const below = subtree(n);
+    const hits = targets.filter(({ t }) => t !== n.parent && !below.includes(t) && dropsOnto(at, boxOf(t.el)));
+    if (!hits.length) continue;
+    const { t: target, m: into } = hits.reduce((a, b) => (dist(b.t, at) < dist(a.t, at) ? b : a));
+    const going = drag.filter((d) => d.parent !== target && !subtree(d).includes(target));
+    const nodes = going.filter((d) => !going.some((o) => o !== d && subtree(o).includes(d)));
+    return { nodes, target, into, at };
+  }
+  return null;
+}
+
+/** The main topic of the node's branch; for a summary of main topics, the first topic it spans. */
+function mainOf(map: MindMap, n: MMNode): MMNode {
+  while (n.depth > 1) n = n.parent!;
+  return n.covers ? map.nodes.get(n.covers[0])! : n;
+}
+
+/**
+ * Topics dragged onto another topic become its subtopics, going among the ones it has by height, clear of its
+ * boundaries and summaries; onto the central topic, on the side they are dropped on. They leave the boundaries and
+ * summaries they were in, and those left with nothing go. A topic that becomes a main topic takes the next branch
+ * color, one that moves to another branch takes that branch's color. They go to their automatic place there.
+ * Onto a topic of another map, they move into that map, which is laid out too; a central topic brings its whole map.
+ */
+function reparentDropped(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap) {
+  const found = dropTarget(tx.live(), map);
+  if (!found) return;
+  const { target, into, nodes, at } = found;
+  const across = into !== map;
+  const moving = new Set(nodes.map((n) => n.id));
+
+  for (const p of new Set(nodes.flatMap((n) => (n.parent ? [n.parent] : [])))) {
+    for (const r of rangesOf(p)) {
+      const rest = r.covers.filter((id) => !moving.has(id));
+      if (rest.length === r.covers.length) continue;
+      if (rest.length) relist(tx, r, rest);
+      else if (!("node" in r)) deleteBoundaryEls(tx, r);
+      else if (!subtree(r.node).includes(target)) deleteSubtree(tx, map, r.node);
+    }
+  }
+  const t = nodeData(tx.get(target.id))!; // relisted when it is a summary they left
+  if (t.folded) {
+    const { folded: _, ...rest } = t;
+    tx.patch(target.id, { customData: { ...tx.get(target.id)!.customData, [KEY]: rest } });
+  }
+
+  const central = !target.parent;
+  const structure = structureOf(into.root);
+  const side: Side = !central ? (target.side as Side)
+    : structure === "right" ? "R" : structure === "left" ? "L"
+    : at.x < middle(target.el).x ? "L" : "R";
+  const cy = (n: MMNode) => middle(n.el).y;
+  const run = [...nodes].sort((a, b) => cy(a) - cy(b));
+  const sibs = target.children.filter((c) => c.side === side); // top to bottom
+  let i = sibs.findIndex((c) => cy(c) > at.y);
+  if (i < 0) i = sibs.length;
+  const ranges = rangesOf(target).map((r) => r.covers);
+  let line = sibs;
+  if (central && structure === "balanced") {
+    // Clockwise, at the nearest place the balance leaves on the side they were dropped on.
+    const other = target.children.filter((c) => c.side !== side);
+    const [right, left] = side === "R" ? [sibs, other] : [other, sibs];
+    line = [...right, ...[...left].reverse()];
+    const ordered = side === "R" ? run : [...run].reverse();
+    line.splice(balancedPlace(line, side === "R" ? i : line.length - i, ordered, side, ranges), 0, ...ordered);
+  } else {
+    line.splice(clearOfRanges(i, sibs, ranges, at.y), 0, ...run);
+  }
+
+  let branches = target.children.length;
+  line.forEach((n, order) => {
+    if (!moving.has(n.id)) {
+      if (n.data.order !== order) tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: { ...n.data, order } } });
+      return;
+    }
+    if (across) moveToMap(tx, map, n, into.root.id);
+    reparent(tx, n, target, order, central ? side : undefined);
+    if (central) restyle(tx, map, n, 1, branchColor(branches++));
+    else if (across || n.depth === 1 || mainOf(map, n) !== mainOf(into, target)) restyle(tx, map, n, target.depth + 1, branchOf(mainOf(into, target)));
+  });
+  if (across) layoutMap(tx, ea, into.root.id);
+}
+
+/**
+ * Hands the topic with everything under it over to another map: its subtopics, connectors, summary braces,
+ * boundaries and fold badges. Its own connector goes; the new map draws one to its new parent. A central topic
+ * brings its whole map, and stops being one.
+ */
+function moveToMap(tx: SceneTx, map: MindMap, n: MMNode, rootId: string) {
+  const ids = new Set(subtree(n).map((x) => x.id));
+  const whole = !n.parent;
+  const own = map.edges.get(n.id);
+  if (own) removeEdge(tx, own);
+  const frames = new Set([...map.boundaries.values()].filter((b) => ids.has(b.parent.id)).map((b) => b.id));
+  for (const el of tx.live()) {
+    const d = el.customData?.[KEY] as { root?: string } | undefined;
+    if (!d || d.root !== map.root.id || el.id === own?.id) continue;
+    const goes = whole
+      || ids.has(nodeData(el)?.self ?? "")
+      || ids.has(edgeData(el)?.child ?? "")
+      || ids.has(braceData(el)?.summary ?? "")
+      || frames.has(boundaryData(el)?.self ?? "")
+      || frames.has(titleData(el)?.boundary ?? "")
+      || ids.has(badgeData(el)?.node ?? "");
+    if (goes) tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, root: rootId } } });
+  }
+  if (whole) {
+    const { structure: _, autoAlign: __, ...rest } = nodeData(tx.get(n.id))!;
+    tx.patch(n.id, { customData: { ...tx.get(n.id)!.customData, [KEY]: rest } });
+  }
 }
 
 /** A topic dragged out of the frame of one or more boundaries it belongs to, with those boundaries. */
@@ -1494,7 +1650,13 @@ function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
   }
 }
 
-/** Deletes the node with its subtopics; the central topic only when allowRoot, taking the whole map with it. */
+/** Whether the topic is a central topic with no other topics in its map, which can always be deleted. */
+export function isLoneCentral(view: ExcalidrawView, nodeId: string): boolean {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  return nodeData(els.find((e) => e.id === nodeId))?.parent === null && buildMap(els, nodeId)?.nodes.size === 1;
+}
+
+/** Deletes the node with its subtopics; the central topic only when allowRoot or it is alone in its map, taking the whole map with it. */
 export function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot: boolean) {
   return deleteNodes(view, [nodeId], allowRoot);
 }
@@ -1503,9 +1665,11 @@ export function deleteNode(view: ExcalidrawView, nodeId: string, allowRoot: bool
 export async function deleteNodes(view: ExcalidrawView, nodeIds: string[], allowRoot: boolean) {
   const next = run(view, (tx, ea) => {
     let next: string | null = null;
+    // Alone before anything is deleted: deleting its topics first doesn't get a central topic past the setting.
+    const alone = new Set(nodeIds.filter((id) => mapOf(tx, id)?.map.nodes.size === 1));
     for (const id of nodeIds) {
       const found = mapOf(tx, id); // nothing when it went with an earlier one
-      if (found) next = removeTopic(tx, ea, found.map, found.node, allowRoot) ?? next;
+      if (found) next = removeTopic(tx, ea, found.map, found.node, allowRoot || alone.has(id)) ?? next;
     }
     return next && !tx.get(next)?.isDeleted ? next : null;
   });
@@ -1845,20 +2009,31 @@ function leaveRanges(tx: SceneTx, map: MindMap, node: MMNode) {
 
 /** Moves the node under a new parent; a manual offset from its old place would make no sense there. */
 function reparent(tx: SceneTx, node: MMNode, parent: MMNode, order: number, side?: Side) {
-  const { side: _, ox, oy, lx, ly, ...rest } = node.data;
-  tx.patch(node.id, { customData: { ...node.el.customData, [KEY]: { ...rest, parent: parent.id, order, ...(side ? { side } : {}) } } });
+  const el = tx.get(node.id)!;
+  const { side: _, ox, oy, lx, ly, ...rest } = nodeData(el)!;
+  tx.patch(node.id, { customData: { ...el.customData, [KEY]: { ...rest, parent: parent.id, order, ...(side ? { side } : {}) } } });
 }
 
-/** Gives a topic that crossed the main-topic line the look of its new level, and its subtree that branch's color. */
+/**
+ * Gives a topic moved to another level the look of its new one, and its subtree that branch's color. Topics under it
+ * that cross the main-topic line with it (a central topic becoming a subtopic) take the look of their new level too.
+ */
 function restyle(tx: SceneTx, map: MindMap, node: MMNode, depth: number, branch: Branch) {
-  const st = styleFor(depth, branch);
-  tx.patch(node.id, { strokeColor: st.borderColor, backgroundColor: st.backgroundColor, strokeWidth: st.strokeWidth });
-  if (node.text) tx.patch(node.text.id, { fontSize: st.fontSize, strokeColor: st.textColor });
+  const level = (d: number) => Math.min(d, 2);
+  const look = (x: MMNode, d: number) => {
+    const st = styleFor(d, branch);
+    tx.patch(x.id, { strokeColor: st.borderColor, backgroundColor: st.backgroundColor, strokeWidth: st.strokeWidth });
+    if (x.text) tx.patch(x.text.id, { fontSize: st.fontSize, strokeColor: st.textColor });
+  };
+  look(node, depth);
   for (const x of subtree(node)) {
     if (x === node) continue;
-    if (!x.data.summary) tx.patch(x.id, { strokeColor: branch.stroke }); // summaries keep their own colors
+    const d = x.depth + depth - node.depth;
+    const relevel = level(d) !== level(x.depth);
+    if (relevel && !x.data.summary) look(x, d);
+    else if (!x.data.summary) tx.patch(x.id, { strokeColor: branch.stroke }); // summaries keep their own colors
     const edge = map.edges.get(x.id);
-    if (edge) tx.patch(edge.id, { strokeColor: branch.stroke });
+    if (edge) tx.patch(edge.id, { strokeColor: branch.stroke, ...(relevel ? { strokeWidth: d === 1 ? 2 : 1.5 } : {}) });
   }
 }
 

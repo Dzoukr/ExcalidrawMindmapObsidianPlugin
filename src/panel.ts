@@ -37,7 +37,7 @@ export interface PanelState {
   promote: boolean; // that node can be promoted to its parent's level
   demote: boolean; // that node can be demoted under the sibling above
   layout: { structure: Structure; autoAlign: boolean } | null; // of the selected topic's map, or of the only map in the drawing
-  canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed
+  canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed, or it is the map's only topic
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 

@@ -341,6 +341,14 @@ export function relationBend(points: number[][]): number | null {
   return ((x1 - (x0 + x2) / 2) * n.x + (y1 - (y0 + y2) / 2) * n.y) / len;
 }
 
+/**
+ * Whether a topic dropped with its middle at the point lands on the box, to become its subtopic: inside it,
+ * within the middle half of its height. Nearer its top or bottom edge, it goes between the box and its neighbour.
+ */
+export function dropsOnto(p: Vec, b: Box): boolean {
+  return p.x >= b.x && p.x <= b.x + b.w && Math.abs(p.y - (b.y + b.h / 2)) <= b.h / 4;
+}
+
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 /**

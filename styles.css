@@ -82,3 +82,17 @@ body.is-phone .mm-btn svg {
   width: 18px;
   height: 18px;
 }
+
+/* While a topic is dragged: the topic it becomes a subtopic of when dropped. */
+.mm-drop-target {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 2px solid var(--interactive-accent);
+  border-radius: var(--radius-m);
+  background-color: hsla(var(--interactive-accent-hsl), 0.12);
+}
+
+.mm-drop-target.mm-hidden {
+  display: none;
+}

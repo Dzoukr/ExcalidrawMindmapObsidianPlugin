@@ -1,7 +1,7 @@
 import { App, FuzzySuggestModal, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem } from "obsidian";
 import {
   Direction, addBoundary, afterDrag, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
-  deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveBoundary, moveNode, navigate, newMap,
+  deleteNode, deleteNodes, demote, dropTargetBox, editBoundaryTitle, editNode, editingNode, editingTitle, isLoneCentral, moveBoundary, moveNode, navigate, newMap,
   newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
   selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, layoutOf, toggleAutoAlign, toggleFold, topicState, unfold,
 } from "./actions";
@@ -52,6 +52,7 @@ interface ViewState {
   pending: ((nodeId: string) => unknown) | null; // action to run once editing ends
   raf: number;
   badge: string | null; // topic whose fold badge was clicked, so the click unfolds it once
+  drop: HTMLElement; // outline of the topic a dragged topic becomes a subtopic of when dropped
 }
 
 const ARROWS: Record<string, Direction> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
@@ -68,6 +69,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private scopePushed = false;
   // While paused, keys and text edits are left to Excalidraw. Not saved: a restart resumes.
   private paused = false;
+  private pointerDown = false;
 
   async onload() {
     this.settings = mergeSettings((await this.loadData()) as Partial<Settings> | null);
@@ -87,7 +89,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const listen = (win: Window) => {
       this.registerDomEvent(win, "keydown", this.onKeyDown, { capture: true });
       for (const type of ["copy", "cut", "paste"] as const) this.registerDomEvent(win, type, this.onClipboard, { capture: true });
+      this.registerDomEvent(win, "pointerdown", () => (this.pointerDown = true), { capture: true });
       this.registerDomEvent(win, "pointerup", this.onPointerUp, { capture: true });
+      this.registerDomEvent(win, "pointercancel", this.onPointerUp, { capture: true });
     };
     listen(window);
     this.registerEvent(this.app.workspace.on("window-open", (_w, win) => listen(win)));
@@ -269,6 +273,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
     const s: ViewState = {
       view, api, panel: new FloatingPanel(this.panelActions(view)), editing: null, pending: null, raf: 0, badge: null,
+      drop: createDiv({ cls: "mm-drop-target mm-hidden" }),
     };
     s.panel.mount(view.contentEl);
     s.unsubscribe = api.onChange?.((_els, appState) => this.onSceneChange(s, appState));
@@ -280,6 +285,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     s.unsubscribe?.();
     if (s.raf) window.cancelAnimationFrame(s.raf);
     s.panel.destroy();
+    s.drop.remove();
   }
 
   private onSceneChange(s: ViewState, appState: AppState) {
@@ -296,6 +302,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
         s.raf = 0;
         this.checkBadge(s);
         if (!this.paused && !s.api.getAppState().editingTextElement) followRelations(s.view);
+        this.showDropTarget(s);
         this.refreshPanel(s);
       });
     }
@@ -306,6 +313,26 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const node = this.paused || s.api.getAppState().viewModeEnabled ? null : selectedBadge(s.view);
     if (node && node !== s.badge) void unfold(s.view, node);
     s.badge = node;
+  }
+
+  /** While topics are dragged, outlines the topic they become subtopics of when dropped now. */
+  private showDropTarget(s: ViewState) {
+    const box = this.pointerDown && !this.paused ? dropTargetBox(s.view) : null;
+    const canvas = s.view.contentEl.querySelector(".excalidraw");
+    s.drop.toggleClass("mm-hidden", !box || !canvas);
+    if (!box || !canvas) return;
+    if (s.drop.parentElement !== s.view.contentEl) s.view.contentEl.appendChild(s.drop);
+    const st = s.api.getAppState();
+    const z = st.zoom?.value ?? 1;
+    const host = s.view.contentEl.getBoundingClientRect();
+    const c = canvas.getBoundingClientRect();
+    const pad = 4;
+    s.drop.setCssStyles({
+      left: `${c.left - host.left + (box.x + st.scrollX) * z - pad}px`,
+      top: `${c.top - host.top + (box.y + st.scrollY) * z - pad}px`,
+      width: `${box.w * z + 2 * pad}px`,
+      height: `${box.h * z + 2 * pad}px`,
+    });
   }
 
   /** Text editing of a node ended: re-layout to fit the new text, then run a queued action. */
@@ -338,7 +365,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       layout: layoutOf(s.view, node?.id ?? onlyMap(s.view)),
       boundary: !editing && !!selectedBoundary(s.view),
       ...t,
-      canDeleteRoot: this.settings.allowDeleteCentralTopic,
+      canDeleteRoot: this.settings.allowDeleteCentralTopic || (!!node && isLoneCentral(s.view, node.id)),
       paused: this.paused,
     });
   }
@@ -508,6 +535,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
   /** Lays out the maps where something was just moved, so subtopics follow and the drop takes effect. */
   private onPointerUp = () => {
+    this.pointerDown = false;
+    for (const s of this.states.values()) s.drop.addClass("mm-hidden");
     const view = this.activeView();
     if (this.paused || !view) return;
     window.setTimeout(() => {
@@ -675,7 +704,7 @@ class MindMapSettingTab extends PluginSettingTab {
       },
       {
         name: "Allow deleting the central topic",
-        desc: "Deleting the central topic removes the whole mind map: every topic and connector.",
+        desc: "Deleting the central topic removes the whole mind map: every topic and connector. A central topic with no other topics can be deleted either way.",
         control: { type: "toggle", key: "allowDeleteCentralTopic" },
       },
       {

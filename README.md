@@ -13,7 +13,7 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | Tab / Insert | Add child |
 | Enter | Add sibling below |
 | Shift+Enter | Add sibling above |
-| Delete / Backspace | Delete the selected topics with their subtopics (the central topic deletes the whole map, if enabled in settings) |
+| Delete / Backspace | Delete the selected topics with their subtopics (the central topic deletes the whole map, if enabled in settings; a central topic with no other topics can always be deleted) |
 | Ctrl+C / Ctrl+X | Copy or cut the selected topics as a Markdown bullet list |
 | Ctrl+V | Paste a Markdown outline or text as subtopics of the selected topic |
 | F2 / Space | Edit text |
@@ -56,6 +56,8 @@ Ctrl+/ collapses a topic with everything below it. A badge shows how many topics
 
 Alt+arrow moves a topic, with its subtopics, one level up or down. A topic that becomes a main topic takes the next branch color, and one that moves under another branch takes that branch's color.
 
+Or drag a topic onto another one to make it a subtopic there, in one move. The topic it lands on is outlined while you drag; drop it near a topic's top or bottom edge instead to place it between topics. Dropped on the central topic, it becomes a main topic on that side. Drop it on a topic of another map to move it into that map; drag a map's central topic onto another map's topic to make the whole map a branch there.
+
 ### 📝 Markdown outlines
 
 Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into a note. Ctrl+V pastes bullet lists, numbered lists or headings back as subtopics of the selected topic. A command builds a whole new map from the outline in the clipboard.
@@ -83,7 +85,7 @@ All options are in **Settings → Excalidraw Mind Map**.
 | Setting | Default | Description |
 |---|---|---|
 | Show control panel on desktop | On | Shows the floating panel on desktop. On phones and tablets it is always shown. |
-| Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. |
+| Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. A central topic with no other topics can be deleted either way. |
 | Structure of new maps | Balanced | How main topics are placed around the central topic: balanced, free, right or left. Each map keeps its own. |
 | Auto-align new maps | On | Topics keep their automatic places and a drop moves a topic among its siblings, instead of leaving it where it is dropped. Each map keeps its own. |
 | Arrows instead of lines | Off | Connectors end in an arrowhead pointing to the subtopic. |
