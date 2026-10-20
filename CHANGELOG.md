@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Duplicate (Ctrl+D, Cmd+D on Mac)** copies the selected topics with everything under them, right below the original: subtopics, summaries, boundaries, colors and collapsed topics. The copy joins the boundaries and summaries the original is in. On the central topic, it duplicates the whole map next to it. Relationships stay with the original. Also in the panel and the command palette.
+
 ## 1.3.0
 
 ### New

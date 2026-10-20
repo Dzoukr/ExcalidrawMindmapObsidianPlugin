@@ -16,6 +16,7 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | Delete / Backspace | Delete the selected topics with their subtopics (the central topic deletes the whole map, if enabled in settings; a central topic with no other topics can always be deleted) |
 | Ctrl+C / Ctrl+X | Copy or cut the selected topics as a Markdown bullet list |
 | Ctrl+V | Paste a Markdown outline or text as subtopics of the selected topic |
+| Ctrl+D (Cmd+D on Mac) | Duplicate the selected topics with their subtopics (the central topic duplicates the whole map) |
 | F2 / Space | Edit text |
 | Arrow keys | Move selection (right/left = child/parent, mirrored on the left side) |
 | Alt+Up / Alt+Down | Move the topic, or the selected boundary with its topics, up or down among its siblings. It stays in its boundaries and summaries, and moves past one it isn't in as a whole; drag it to take it in or out |
@@ -26,7 +27,7 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 
 ### ⌨️ Keyboard-first editing
 
-Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, delete branches, move between topics and reorder them. While editing, Enter commits the text and Tab commits it and adds a child.
+Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. While editing, Enter commits the text and Tab commits it and adds a child.
 
 ### 📐 Automatic layout
 

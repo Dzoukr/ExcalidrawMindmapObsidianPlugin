@@ -355,10 +355,9 @@ function createTitle(ea: ExcalidrawAutomate, rootId: string, boundaryId: string,
   return els;
 }
 
-/** Boundary frame with its title, not yet added to the scene. */
-function createBoundary(ea: ExcalidrawAutomate, rootId: string, parent: MMNode, covers: MMNode[]): El[] {
+/** Boundary frame with its title around the topics, from the first one, not yet added to the scene. */
+function createBoundary(ea: ExcalidrawAutomate, rootId: string, parentId: string, topics: string[], first: MMNode): El[] {
   const c = boundaryColors();
-  const first = covers[0];
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: c.line,
@@ -373,7 +372,7 @@ function createBoundary(ea: ExcalidrawAutomate, rootId: string, parent: MMNode, 
   });
   const id = ea.addRect(first.el.x, first.el.y, first.el.width, first.el.height);
   const frame = ea.getElement(id);
-  frame.customData = { [KEY]: { boundary: true, self: id, root: rootId, parent: parent.id, topics: covers.map((n) => n.id) } };
+  frame.customData = { [KEY]: { boundary: true, self: id, root: rootId, parent: parentId, topics } };
   ea.clear();
   const font = first.text?.fontFamily ?? 1;
   return [frame, ...createTitle(ea, rootId, id, { x: first.el.x, y: first.el.y - 30 }, first.el.roughness, font)];
@@ -1849,7 +1848,7 @@ export async function addBoundary(view: ExcalidrawView, nodeIds: string[]) {
       ...[...map.boundaries.values()].filter((b) => b.covers.every((id) => enclosed.has(id))).flatMap((b) => [b.el, b.title]),
     ];
     const indexes = below.map((el) => (el ? tx.indexOf(el.id) : -1)).filter((i) => i >= 0);
-    const els = createBoundary(ea, map.root.id, parent, covered);
+    const els = createBoundary(ea, map.root.id, parent.id, ids, covered[0]);
     if (indexes.length) tx.insert(els, Math.min(...indexes));
     else els.forEach((el) => tx.add(el));
     layoutMap(tx, ea, map.root.id);
@@ -2091,6 +2090,109 @@ export function changeLevel(view: ExcalidrawView, nodeId: string, dir: "left" | 
   const side = d ? buildMap(els, d.root)?.nodes.get(nodeId)?.side : null;
   if (!side) return;
   return (side === "R") === (dir === "right") ? demote(view, nodeId) : promote(view, nodeId);
+}
+
+// ---------- duplicate ----------
+
+// The look a copy takes from its original; not opacity, lock or link, which a collapsed topic hides it by.
+const LOOK = ["strokeColor", "backgroundColor", "fillStyle", "strokeWidth", "strokeStyle", "roughness", "roundness"];
+const TEXT_LOOK = ["strokeColor", "fontSize", "fontFamily", "textAlign", "verticalAlign"];
+
+const lookOf = (el: El, keys: string[]): Partial<El> => {
+  const from = el as unknown as Record<string, unknown>;
+  return Object.fromEntries(keys.filter((k) => k in from).map((k) => [k, from[k]]));
+};
+
+/**
+ * Copies the topic with everything under it: subtopics, summaries and boundaries, with their texts, looks, collapsed
+ * topics and moves. Under the given parent of the map, or as the central topic of a new map when parentId is null.
+ * Relationships stay with the original. Returns the copy.
+ */
+function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode, parentId: string | null, data: Partial<NodeData>, at: Vec): string {
+  const ids = new Map<string, string>(); // original -> copy
+  let root = parentId === null ? "" : map.root.id;
+  for (const x of subtree(n)) {
+    const top = x === n;
+    const { self: _, lx, ly, ox, oy, ...rest } = x.data;
+    const id = createNode(tx, ea, {
+      depth: x.depth,
+      branch: branchOf(x),
+      text: topicText(x),
+      data: {
+        ...rest,
+        root,
+        parent: top ? parentId : ids.get(x.parent!.id)!,
+        ...(top ? data : { ox, oy }), // under the copy, topics keep their manual moves
+        ...(x.data.summary ? { summary: x.data.summary.flatMap((s) => ids.get(s) ?? []) } : {}),
+      },
+      at,
+      fontFamily: x.text?.fontFamily ?? 1,
+      roughness: x.el.roughness,
+    });
+    ids.set(x.id, id);
+    root ||= id;
+    tx.patch(id, lookOf(x.el, LOOK));
+    const tid = boundTextId(tx.get(id)!);
+    if (tid && x.text) tx.patch(tid, lookOf(x.text, TEXT_LOOK));
+  }
+  for (const b of map.boundaries.values()) {
+    const parent = ids.get(b.parent.id);
+    const topics = boundaryData(b.el)!.topics.flatMap((id) => ids.get(id) ?? []);
+    if (!parent || !topics.length) continue;
+    const els = createBoundary(ea, root, parent, topics, map.nodes.get(b.covers[0])!);
+    Object.assign(els[0], lookOf(b.el, LOOK));
+    if (b.title) Object.assign(els[1], lookOf(b.title, LOOK));
+    const title = b.titleText?.rawText ?? b.titleText?.originalText ?? b.titleText?.text;
+    if (b.titleText && title !== undefined) Object.assign(els[2], { ...lookOf(b.titleText, TEXT_LOOK), text: title, originalText: title, rawText: title });
+    tx.insert(els, tx.indexOf(b.id)); // behind the topics, like the original
+  }
+  return ids.get(n.id)!;
+}
+
+/**
+ * Duplicates the topics with everything under them, like XMind's Duplicate: each copy goes right below its original,
+ * in the boundaries and summaries the original is in. A central topic duplicates its whole map, next to it.
+ * Summaries are skipped, and a topic under another one given goes along with that one. Returns the copies.
+ */
+function duplicate(tx: SceneTx, ea: ExcalidrawAutomate, nodeIds: string[]): string[] {
+  const copies: string[] = [];
+  const found = nodeIds.map((id) => mapOf(tx, id)).filter((f): f is { map: MindMap; node: MMNode } => !!f && !f.node.covers);
+  const tops = found.filter((f) => !found.some((o) => o !== f && o.map.root.id === f.map.root.id && o.node !== f.node && subtree(o.node).includes(f.node)));
+  for (const { node: original } of tops) {
+    const { map, node } = mapOf(tx, original.id)!; // as the copies made so far left it
+    if (!node.parent) {
+      // A whole map, right of everything it takes up.
+      const boxes = [...map.nodes.values()].filter((x) => !isHidden(x)).map((x) => boxOf(x.el));
+      const left = Math.min(...boxes.map((b) => b.x));
+      const right = Math.max(...boxes.map((b) => b.x + b.w));
+      const id = copyBranch(tx, ea, map, node, null, {}, { x: node.el.x + right - left + 2 * NEW_MAP_GAP, y: node.el.y });
+      layoutMap(tx, ea, id);
+      copies.push(id);
+      continue;
+    }
+    const parent = node.parent;
+    const { line, reversed } = orderLine(node);
+    const i = line.indexOf(node);
+    const below = reversed ? line[i - 1] : line[i + 1];
+    const order = below ? (node.data.order + below.data.order) / 2 : node.data.order + (reversed ? -1 : 1);
+    const side = node.depth === 1 ? { side: node.data.side ?? (node.side as Side) } : {};
+    const id = copyBranch(tx, ea, map, node, parent.id, { order, ...side }, { x: node.el.x, y: node.el.y + node.el.height + 10 });
+    for (const r of rangesOf(parent)) if (r.covers.includes(node.id)) relist(tx, r, [...r.covers, id]);
+    layoutMap(tx, ea, map.root.id);
+    copies.push(id);
+  }
+  return copies;
+}
+
+/** Duplicates the topics in one undo step and selects the copies. */
+export async function duplicateNodes(view: ExcalidrawView, nodeIds: string[]) {
+  const copies = run(view, (tx, ea) => duplicate(tx, ea, nodeIds)) ?? [];
+  if (!copies.length) return;
+  await nextFrame();
+  if (copies.length === 1) return select(view, copies[0]);
+  const ea = getEA(view);
+  ea?.selectElementsInView(copies);
+  ea?.destroy?.();
 }
 
 // ---------- markdown outlines ----------

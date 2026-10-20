@@ -1,7 +1,7 @@
 import { App, FuzzySuggestModal, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem } from "obsidian";
 import {
   Direction, addBoundary, afterDrag, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
-  deleteNode, deleteNodes, demote, dropTargetBox, editBoundaryTitle, editNode, editingNode, editingTitle, isLoneCentral, moveBoundary, moveNode, navigate, newMap,
+  deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, editNode, editingNode, editingTitle, isLoneCentral, moveBoundary, moveNode, navigate, newMap,
   newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
   selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, layoutOf, toggleAutoAlign, toggleFold, topicState, unfold,
 } from "./actions";
@@ -132,6 +132,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "new-mind-map-from-outline",
       name: "Insert new mind map from Markdown outline in the clipboard",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.pasteCommand(v, true)),
+    });
+    this.addCommand({
+      id: "duplicate",
+      name: "Duplicate selected topics with their subtopics",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.duplicate(v)),
     });
     this.addCommand({
       id: "add-summary",
@@ -410,6 +415,14 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     void addSummary(view, selectedNodes(view).map((n) => n.id));
   }
 
+  /** Duplicates the selected topics, or the topic being edited. */
+  private duplicate(view: ExcalidrawView) {
+    if (editingNode(view)) return this.runOnNode(view, (id) => duplicateNodes(view, [id]));
+    const ids = selectedTopics(view).map((n) => n.id);
+    if (!ids.length) return void new Notice("Select one or more topics to duplicate.");
+    void duplicateNodes(view, ids);
+  }
+
   /** Puts a boundary around the selected topics, or the topic being edited. */
   private bound(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => addBoundary(view, [id]));
@@ -523,6 +536,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
       copy: () => void this.copyCommand(view),
       paste: () => void this.paste(view),
+      duplicate: () => this.duplicate(view),
       promote: () => this.runOnNode(view, (id) => promote(view, id)),
       demote: () => this.runOnNode(view, (id) => demote(view, id)),
       reset: () => resetLayout(view, selectedNode(view)?.id),
@@ -562,11 +576,23 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const level = alt && (e.key === "ArrowLeft" || e.key === "ArrowRight");
     // XMind's Ctrl+/ (Cmd+/ on Mac) collapses or expands the topic; the physical key also counts on other keyboard layouts.
     const fold = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "/" || e.code === "Slash");
-    if (!plain && !reorder && !level && !fold) return;
+    // XMind's Ctrl+D (Cmd+D on Mac) duplicates the topic; Excalidraw's own would copy its shapes, not the topic.
+    const dup = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === "d" || e.code === "KeyD");
+    if (!plain && !reorder && !level && !fold && !dup) return;
 
     let action: ((id: string) => unknown) | null = null;
 
-    if (fold) {
+    if (dup) {
+      if (appState.editingTextElement) return;
+      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
+      const ids = selectedTopics(view).map((n) => n.id);
+      if (!ids.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      void duplicateNodes(view, ids);
+      return;
+    } else if (fold) {
       if (appState.editingTextElement || !selectedNode(view)) return;
       if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
       action = (id) => toggleFold(view, id);

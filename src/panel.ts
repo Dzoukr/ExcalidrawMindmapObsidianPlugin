@@ -15,6 +15,7 @@ export interface PanelActions {
   toggleFold: () => void;
   copy: () => void;
   paste: () => void;
+  duplicate: () => void;
   promote: () => void;
   demote: () => void;
   reset: () => void;
@@ -41,7 +42,7 @@ export interface PanelState {
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
 
-type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "edit" | "remove" | "copy" | "paste" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
+type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "edit" | "remove" | "copy" | "paste" | "duplicate" | "left" | "up" | "down" | "right" | "promote" | "demote" | "fold" | "layout" | "pause";
 
 /** Floating control bar docked at the bottom of an Excalidraw view. */
 export class FloatingPanel {
@@ -77,6 +78,7 @@ export class FloatingPanel {
     const gc = group();
     button(gc, "copy", "copy", "Copy as Markdown (Ctrl+C)", a.copy);
     button(gc, "paste", "clipboard-paste", "Paste Markdown as subtopics (Ctrl+V), or as a new map with nothing selected", a.paste);
+    button(gc, "duplicate", "copy-plus", "Duplicate with subtopics (Ctrl+D)", a.duplicate);
     const g3 = group();
     button(g3, "left", "arrow-left", "Select left", () => a.nav("left"));
     button(g3, "up", "arrow-up", "Select up", () => a.nav("up"));
@@ -143,6 +145,7 @@ export class FloatingPanel {
     set("fold", s.foldable);
     set("copy", s.topics);
     set("paste", true);
+    set("duplicate", (s.topics || s.node) && !s.summary);
     set("promote", s.promote);
     set("demote", s.demote);
     const fold = this.buttons.get("fold")!;
