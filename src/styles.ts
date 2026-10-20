@@ -1,5 +1,7 @@
 // Default node styles per depth. Applied when a node is created, layout never restyles existing nodes.
 
+import type { Structure } from "./model";
+
 export interface Branch { stroke: string; fill: string; }
 
 export interface NodeStyle {
@@ -53,6 +55,17 @@ export function setArrows(v: boolean) {
 }
 
 export const connectorArrowhead = () => (arrows ? "arrow" : null);
+
+/** Structure and auto-align of new maps; also from the plugin settings. */
+export interface MapDefaults { structure: Structure; autoAlign: boolean; }
+
+let mapDefaults: MapDefaults = { structure: "balanced", autoAlign: true };
+
+export function setMapDefaults(d: MapDefaults) {
+  mapDefaults = d;
+}
+
+export const newMapDefaults = () => mapDefaults;
 
 /** Branch colors for the i-th main topic of a map. */
 export function branchColor(i: number): Branch {

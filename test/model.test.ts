@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { El } from "../src/excalidraw.ts";
-import { KEY, boundaryData, buildMap, isHidden, nodeData, titleData } from "../src/model.ts";
+import { KEY, balancedSplit, boundaryData, buildMap, isHidden, nodeData, orderLine, rangesIn, structureOf, titleData } from "../src/model.ts";
 
 const el = (id: string, data: object, extra: Partial<El> = {}): El =>
   ({ id, type: "rectangle", x: 0, y: 0, width: 10, height: 10, customData: { [KEY]: data }, ...extra });
@@ -59,4 +59,77 @@ test("only a topic with subtopics folds, never the central topic, and a stale ba
   assert.deepEqual([...map.badges.keys()], ["a"]);
   assert.deepEqual(map.strayBadges.map((e) => e.id), ["bb"]);
   assert.equal(nodeData(els[4]), null);
+});
+
+/** A central topic with main topics a0, a1... in that order, each with the stored side given. */
+const mains = (structure: string | undefined, sides: string[]) => [
+  el("r", { self: "r", root: "r", parent: null, order: 0, ...(structure ? { structure } : {}) }),
+  ...sides.map((side, i) => el(`a${i}`, { self: `a${i}`, root: "r", parent: "r", order: i, side })),
+];
+const shown = (els: El[]) => {
+  const map = buildMap(els, "r")!;
+  const ids = (side: string) => map.root.children.filter((c) => c.side === side).map((c) => c.id);
+  return { R: ids("R"), L: ids("L"), map };
+};
+
+test("a map without a structure, or with an unknown one, is free and keeps the stored sides", () => {
+  for (const s of [undefined, "spiral"]) {
+    const { R, L, map } = shown(mains(s, ["L", "R", "L"]));
+    assert.equal(structureOf(map.root), "free");
+    assert.deepEqual(R, ["a1"]);
+    assert.deepEqual(L, ["a0", "a2"]);
+  }
+});
+
+test("a balanced map puts the first half right and the rest left, clockwise", () => {
+  const { R, L } = shown(mains("balanced", ["L", "L", "L", "L", "L"]));
+  assert.deepEqual(R, ["a0", "a1", "a2"]);
+  assert.deepEqual(L, ["a4", "a3"]); // top to bottom: the left side runs against the order
+});
+
+test("a one-sided map shows every main topic on its side and keeps the stored sides", () => {
+  const { R, L, map } = shown(mains("right", ["R", "L", "R"]));
+  assert.deepEqual(R, ["a0", "a1", "a2"]);
+  assert.deepEqual(L, []);
+  assert.equal(map.nodes.get("a1")!.data.side, "L");
+  assert.deepEqual(shown(mains("left", ["R", "L"])).L, ["a0", "a1"]);
+});
+
+test("a summary of main topics is on their side, whatever side it has stored", () => {
+  const els = [
+    ...mains("balanced", ["R", "R", "R", "R"]),
+    el("s", { self: "s", root: "r", parent: "r", order: 0, side: "R", summary: ["a2", "a3"] }),
+  ];
+  const map = buildMap(els, "r")!;
+  assert.equal(map.nodes.get("s")!.side, "L");
+  assert.deepEqual(map.root.summaries[0].covers, ["a3", "a2"]);
+});
+
+test("the order line of a balanced map runs clockwise through all main topics", () => {
+  const map = buildMap(mains("balanced", ["R", "R", "R", "R"]), "r")!;
+  const right = orderLine(map.nodes.get("a1")!);
+  assert.deepEqual(right.line.map((n) => n.id), ["a0", "a1", "a2", "a3"]);
+  assert.equal(right.reversed, false);
+  assert.equal(orderLine(map.nodes.get("a3")!).reversed, true);
+  const free = buildMap(mains(undefined, ["R", "L", "R"]), "r")!;
+  assert.deepEqual(orderLine(free.nodes.get("a2")!).line.map((n) => n.id), ["a0", "a2"]);
+});
+
+test("the balanced split is the middle, or the nearest place that cuts no range", () => {
+  assert.equal(balancedSplit(5, []), 3);
+  assert.equal(balancedSplit(4, [[1, 2]]), 3); // 2 would cut it, 3 is as near and further right
+  assert.equal(balancedSplit(6, [[1, 4]]), 5);
+  assert.equal(balancedSplit(3, [[0, 2]]), 3); // one range of all: all right
+  assert.deepEqual(rangesIn([{ id: "a" }, { id: "b" }, { id: "c" }], [["c", "a"], ["x"], ["b", "x"]]), [[0, 2], [1, 1]]);
+});
+
+test("a balanced map keeps a boundary of main topics on one side", () => {
+  const els = [
+    ...mains("balanced", ["R", "R", "R", "R"]),
+    el("f", { boundary: true, self: "f", root: "r", parent: "r", topics: ["a1", "a2"] }),
+  ];
+  const { R, L, map } = shown(els);
+  assert.deepEqual(R, ["a0", "a1", "a2"]);
+  assert.deepEqual(L, ["a3"]);
+  assert.deepEqual(map.boundaries.get("f")!.covers, ["a1", "a2"]);
 });

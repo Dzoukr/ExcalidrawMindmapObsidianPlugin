@@ -1,17 +1,18 @@
 import { Notice } from "obsidian";
-import { El, ExcalidrawAutomate, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
+import { Binding, El, ExcalidrawAutomate, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import {
-  Box, Brace, RELATION_BEND, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
+  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, computeLayout, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
 } from "./layout";
 import {
-  HIDDEN_KEY, HiddenState, KEY, MMBadge, MMBoundary, MMNode, MindMap, NodeData, badgeData, boundTextId, boundaryData, braceData, buildMap,
-  edgeData, hiddenState, isHidden, isRelationLabel, nodeData, relationData, resolveNodeElement, rootIdOf, subtree, titleData,
+  HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMNode, MMSummary, MindMap, NodeData, RelationData, Structure, badgeData, balancedSplit, byOrder, boundTextId, boundaryData, braceData,
+  buildMap, edgeData, hiddenState, isHidden, isRelationLabel, nodeData, orderLine, rangesIn, relationData, resolveNodeElement, rootIdOf, structureIn,
+  structureOf, subtree, titleData, twoSided,
 } from "./model";
 import { OutlineItem, parseOutline, toMarkdown } from "./outline";
 import {
   BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING,
   SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, boundaryColors, branchColor, connectorArrowhead, paddingFor, relationshipColors,
-  styleFor, summaryStyle,
+  newMapDefaults, styleFor, summaryStyle,
 } from "./styles";
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -69,6 +70,32 @@ export function selectedTopics(view: ExcalidrawView): El[] {
     else if (!edgeData(el) && !braceData(el) && !badgeData(el) && !boundaryData(el) && !titleData(el) && !relationData(el)) return [];
   }
   return [...nodes.values()];
+}
+
+/** What an element stands for as an end of a relationship: its topic, or its boundary's frame for a frame or title. */
+function relationEnd(el: El | undefined, get: (id: string) => El | undefined): El | null {
+  if (el?.type === "text" && el.containerId) el = get(el.containerId);
+  const title = titleData(el);
+  if (title) el = get(title.boundary);
+  return el && !el.isDeleted && (nodeData(el) || boundaryData(el)) ? el : null;
+}
+
+/**
+ * The topics and boundaries selected, a boundary by its frame or title, in the order they were selected;
+ * empty when anything else is selected too.
+ */
+export function selectedEnds(view: ExcalidrawView): string[] {
+  const api = view.excalidrawAPI;
+  if (!api) return [];
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const byId = new Map(api.getSceneElements().map((e) => [e.id, e]));
+  const ends: string[] = [];
+  for (const id of Object.keys(sel).filter((k) => sel[k])) {
+    const end = relationEnd(byId.get(id), (i) => byId.get(i));
+    if (!end) return [];
+    if (!ends.includes(end.id)) ends.push(end.id);
+  }
+  return ends;
 }
 
 /** The boundary whose frame or title (alone) is selected, if any. */
@@ -242,9 +269,13 @@ function removeEdge(tx: SceneTx, edge: El) {
   removeBound(tx, edge.endBinding?.elementId, edge.id);
 }
 
+/** Where a connector is glued to the parent and to the child: the facing middles of their sides. */
+const gluePoints = (side: Side): { start: [number, number]; end: [number, number] } =>
+  side === "R" ? { start: [1, 0.5], end: [0, 0.5] } : { start: [0, 0.5], end: [1, 0.5] };
+
 function createEdge(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, n: MMNode, start: Vec, end: Vec) {
   const parent = n.parent!;
-  const side = n.side as Side;
+  const glue = gluePoints(n.side as Side);
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: n.el.strokeColor,
@@ -261,8 +292,8 @@ function createEdge(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, n: MMNo
       endArrowHead: connectorArrowhead(),
       startObjectId: parent.id,
       endObjectId: n.id,
-      startFixedPoint: side === "R" ? [1, 0.5] : [0, 0.5],
-      endFixedPoint: side === "R" ? [0, 0.5] : [1, 0.5],
+      startFixedPoint: glue.start,
+      endFixedPoint: glue.end,
     },
   );
   const el = ea.getElement(id);
@@ -461,8 +492,18 @@ const sameData = (a: NodeData, b: NodeData) =>
 
 /** Sizes nodes to their text, positions the whole map and repairs connectors, all inside the transaction. */
 function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap | null {
-  const map = buildMap(tx.live(), rootId);
-  if (!map) return null;
+  let m = buildMap(tx.live(), rootId);
+  if (!m) return null;
+  // What the user did by dragging since the last layout, a step at a time on the map as the step before left it.
+  // Topics that left or joined a boundary or summary, or changed sides, are kept where they were dropped.
+  const dropped = new Set<string>();
+  for (const step of [moveBoundaries, fitBoundaries, leaveBoundaries, leaveSummaries, crossSides, joinBoundaries, joinSummaries, reorderDropped]) {
+    const rev = tx.revision;
+    for (const id of step(tx, m) ?? []) dropped.add(id);
+    if (tx.revision !== rev) m = buildMap(tx.live(), rootId)!;
+  }
+  const map = m;
+  const aligned = autoAligned(map.root.data);
 
   // A boundary whose title was deleted by hand gets a new one, right above its frame.
   for (const b of map.boundaries.values()) {
@@ -477,17 +518,29 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
   for (const n of map.nodes.values()) sizes.set(n.id, measureBox(ea, n.text, padOf(n)));
   for (const b of map.boundaries.values()) sizes.set(b.id, measureBox(ea, b.titleText, TITLE_PADDING));
 
-  const offsets = updateOffsets(map.root, (id) => {
+  // Auto-aligned, no topic keeps a manual move.
+  const offsets = aligned ? new Map<string, Vec>() : updateOffsets(map.root, (id) => {
     const n = map.nodes.get(id)!;
     return { x: n.el.x, y: n.el.y, lx: n.data.lx, ly: n.data.ly, ox: n.data.ox ?? 0, oy: n.data.oy ?? 0 };
   });
   const r = map.root.el;
-  const { boxes, braces, boundaries } = computeLayout(
+  const place = () => computeLayout(
     map.root,
     (id) => sizes.get(id)!,
     (id) => offsets.get(id) ?? { x: 0, y: 0 },
     { x: r.x + r.width / 2, y: r.y + r.height / 2 },
   );
+  // Otherwise a dropped topic stays where it is: its offset is taken from its new place.
+  if (dropped.size && !aligned) {
+    for (const id of dropped) offsets.set(id, { x: 0, y: 0 });
+    const auto = place().boxes;
+    for (const id of dropped) {
+      const el = map.nodes.get(id)!.el;
+      offsets.set(id, { x: el.x - auto.get(id)!.x, y: el.y - auto.get(id)!.y });
+    }
+  }
+  const { boxes, braces, boundaries } = place();
+  const sided = twoSided(structureOf(map.root));
 
   for (const n of map.nodes.values()) {
     const b = boxes.get(n.id);
@@ -495,13 +548,16 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
     const s = sizes.get(n.id)!;
     const o = offsets.get(n.id) ?? { x: 0, y: 0 };
     const data: NodeData = { ...n.data, parent: n.parent?.id ?? null, lx: b.x, ly: b.y, ox: o.x, oy: o.y };
-    if (n.depth === 1) data.side = n.side!;
+    if (n.depth === 1 && sided) data.side = n.side!; // a one-sided map keeps the sides for when it is two-sided again
     placeBox(tx, n.el, n.text, b, s, padOf(n), sameData(n.data, data) ? {} : { customData: { ...n.el.customData, [KEY]: data } });
   }
 
   for (const [id, { frame, title }] of boundaries) {
     const b = map.boundaries.get(id)!;
-    placeBox(tx, b.el, null, frame, sizes.get(id)!, TITLE_PADDING);
+    const d = boundaryData(b.el)!;
+    const placed = near(d.lx, frame.x) && near(d.ly, frame.y) && near(d.lw, frame.w) && near(d.lh, frame.h);
+    const data = { ...d, lx: frame.x, ly: frame.y, lw: frame.w, lh: frame.h };
+    placeBox(tx, b.el, null, frame, sizes.get(id)!, TITLE_PADDING, placed ? {} : { customData: { ...b.el.customData, [KEY]: data } });
     placeBox(tx, b.title!, b.titleText, title, sizes.get(id)!, TITLE_PADDING);
   }
   for (const el of map.strayBoundaries) deleteWithText(tx, el);
@@ -520,6 +576,13 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
     const same = near(edge.x, start.x) && near(edge.y, start.y) && pts?.length === 2 && near(pts[1][0], dx) && near(pts[1][1], dy);
     if (!same)
       tx.patch(edge.id, { x: start.x, y: start.y, points: [[0, 0], [dx, dy]], width: Math.abs(dx), height: Math.abs(dy) });
+    // A branch that changed sides gets glued to the other sides, or Excalidraw would route it back when a topic is dragged.
+    const glue = gluePoints(n.side as Side);
+    const reglue = (b: Binding | null | undefined, p: [number, number]) =>
+      b?.fixedPoint && !(near(b.fixedPoint[0], p[0]) && near(b.fixedPoint[1], p[1])) ? { ...b, fixedPoint: p } : null;
+    const sb = reglue(edge.startBinding, glue.start);
+    const eb = reglue(edge.endBinding, glue.end);
+    if (sb || eb) tx.patch(edge.id, { ...(sb ? { startBinding: sb } : {}), ...(eb ? { endBinding: eb } : {}) });
   }
   for (const e of map.strayEdges) removeEdge(tx, e);
 
@@ -558,6 +621,528 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
   return map;
 }
 
+/** Gives the topics the orders 0, 1, 2... in the sequence given, with any more data for each. */
+function renumber(tx: SceneTx, line: MMNode[], more: (n: MMNode) => Partial<NodeData> = () => ({})) {
+  line.forEach((n, i) => {
+    const m = more(n);
+    if (n.data.order !== i || Object.keys(m).length)
+      tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: { ...n.data, order: i, ...m } } });
+  });
+}
+
+/** A boundary or a summary: either spans a run of siblings, from the first topic it lists to the last. */
+type Range = MMBoundary | MMSummary;
+
+const rangesOf = (p: MMNode): Range[] => [...p.boundaries, ...p.summaries];
+
+/** Makes the boundary or summary list exactly these topics. */
+function relist(tx: SceneTx, r: Range, ids: string[]) {
+  const id = "node" in r ? r.node.id : r.id;
+  const el = tx.get(id)!;
+  const d = el.customData![KEY] as object;
+  tx.patch(id, { customData: { ...el.customData, [KEY]: { ...d, ["node" in r ? "summary" : "topics"]: ids } } });
+}
+
+/**
+ * A place among the siblings (top to bottom) moved out of the ranges of topics given, so a topic put there
+ * doesn't join them: to just before or after the range, whichever side of its middle y is on.
+ */
+function clearOfRanges(at: number, sibs: MMNode[], ranges: string[][], y: number): number {
+  for (const covers of ranges) {
+    const from = sibs.findIndex((c) => c.id === covers[0]);
+    const to = sibs.findIndex((c) => c.id === covers[covers.length - 1]);
+    if (from < 0 || to < 0 || at <= from || at > to) continue;
+    at = y > (middle(sibs[from].el).y + middle(sibs[to].el).y) / 2 ? to + 1 : from;
+  }
+  return at;
+}
+
+// ---------- what the user dragged since the last layout ----------
+
+const middle = (el: El): Vec => ({ x: el.x + el.width / 2, y: el.y + el.height / 2 });
+
+const middleIn = (el: El, area: El | Box) => {
+  const c = middle(el);
+  const [w, h] = "w" in area ? [area.w, area.h] : [area.width, area.height];
+  return c.x >= area.x && c.x <= area.x + w && c.y >= area.y && c.y <= area.y + h;
+};
+
+/** How far the element is from where the layout last put it; null before its first layout. */
+const shiftOf = (el: El, at: { lx?: number; ly?: number }): Vec | null =>
+  at.lx === undefined || at.ly === undefined ? null : { x: el.x - at.lx, y: el.y - at.ly };
+
+const isMove = (v: Vec) => Math.max(Math.abs(v.x), Math.abs(v.y)) >= MOVE_EPSILON;
+
+/** Main topics of a two-sided map dragged since the last layout to the other side of the central topic. */
+function crossedTopics(map: MindMap): MMNode[] {
+  if (!twoSided(structureOf(map.root))) return [];
+  const cx = middle(map.root.el).x;
+  return map.root.children.filter((n) => {
+    const shift = shiftOf(n.el, n.data);
+    return !!shift && isMove(shift) && middle(n.el).x < cx !== (n.side === "L");
+  });
+}
+
+/** Whether the user moved a topic or a boundary's frame since the map's last layout. */
+const moved = (map: MindMap) =>
+  [...map.nodes.values()].some((n) => { const s = shiftOf(n.el, n.data); return !!s && isMove(s); }) ||
+  [...map.boundaries.values()].some(reshaped);
+
+/**
+ * Once something is dropped, the maps of the selection are laid out when anything in them moved, so subtopics
+ * follow their topic and what the drop means (side, boundary, summary, place among siblings) shows right away.
+ */
+export function afterDrag(view: ExcalidrawView) {
+  const api = view.excalidrawAPI;
+  if (!api) return;
+  const els = api.getSceneElements();
+  const byId = new Map(els.map((e) => [e.id, e]));
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const roots = new Set<string>();
+  for (const id of Object.keys(sel).filter((k) => sel[k])) {
+    const el = byId.get(id);
+    const r = rootIdOf(el?.type === "text" && el.containerId ? byId.get(el.containerId) : el);
+    if (r) roots.add(r);
+  }
+  for (const r of roots) {
+    const map = buildMap(els, r);
+    if (map && moved(map)) relayout(view, r);
+  }
+}
+
+/** How far the user moved the boundary's frame since the last layout, without resizing it; null when not. */
+function shifted(b: MMBoundary): Vec | null {
+  const d = boundaryData(b.el)!;
+  const shift = shiftOf(b.el, d);
+  if (!shift || !isMove(shift) || d.lw === undefined || d.lh === undefined || b.el.customData?.[HIDDEN_KEY]) return null;
+  return isMove({ x: b.el.width - d.lw, y: b.el.height - d.lh }) ? null : shift;
+}
+
+/**
+ * A boundary whose frame the user moved takes along its topics, with the boundaries and summary braces among them,
+ * as if they had been dragged with it: across to the other side, and in an auto-aligned map among their siblings
+ * by height, as a whole. Topics moved along with the frame already stay where they are.
+ */
+function moveBoundaries(tx: SceneTx, map: MindMap) {
+  for (const b of map.boundaries.values()) {
+    const shift = shifted(b);
+    if (!shift) continue;
+    const ids = new Set(b.covers);
+    const by = (el: El | null | undefined) => el && tx.patch(el.id, { x: el.x + shift.x, y: el.y + shift.y });
+    for (const id of ids) {
+      const n = map.nodes.get(id)!;
+      const own = shiftOf(n.el, n.data);
+      if (own && isMove(own)) continue;
+      by(n.el);
+      by(n.text);
+    }
+    // Inner frames and braces go along, so their topics stay inside; this frame now counts as placed where it is.
+    for (const o of b.parent.boundaries) {
+      if (o === b || !o.covers.every((id) => ids.has(id))) continue;
+      by(o.el);
+      by(o.title);
+      by(o.titleText);
+      const d = boundaryData(o.el)!;
+      tx.patch(o.id, { customData: { ...tx.get(o.id)!.customData, [KEY]: { ...d, lx: (d.lx ?? 0) + shift.x, ly: (d.ly ?? 0) + shift.y } } });
+    }
+    for (const sm of b.parent.summaries) if (sm.covers.every((id) => ids.has(id))) by(map.braces.get(sm.node.id));
+    tx.patch(b.id, { customData: { ...b.el.customData, [KEY]: { ...boundaryData(b.el)!, lx: b.el.x, ly: b.el.y } } });
+
+    // Across the central topic, crossing sides takes it from here; otherwise an auto-aligned map moves it among its siblings.
+    const p = b.parent;
+    const members = b.covers.map((id) => map.nodes.get(id)!);
+    const side = members[0].side;
+    const crosses = !p.parent && twoSided(structureOf(p)) && middle(b.el).x < middle(p.el).x !== (side === "L");
+    if (crosses || !autoAligned(map.root.data)) continue;
+    const y = middle(b.el).y;
+    const sibs = p.children.filter((c) => c.side === side && !ids.has(c.id)); // top to bottom
+    const index = (cid: string) => sibs.findIndex((c) => c.id === cid);
+    let at = sibs.findIndex((c) => middle(c.el).y > y);
+    if (at < 0) at = sibs.length;
+    // Within the narrowest range around it, listed so its end keeps it in; out of the others.
+    const around = rangesOf(p).filter((r) => r !== b && r.covers.length > ids.size && b.covers.every((id) => r.covers.includes(id)));
+    for (const r of around) if (!b.covers.every((id) => lists(r, id))) relist(tx, r, r.covers);
+    if (around.length) {
+      const inner = around.reduce((a, c) => (c.covers.length < a.covers.length ? c : a)).covers.filter((id) => !ids.has(id));
+      at = Math.min(Math.max(at, index(inner[0])), index(inner[inner.length - 1]) + 1);
+    }
+    at = clearOfRanges(at, sibs, rangesOf(p).filter((r) => !r.covers.some((id) => ids.has(id))).map((r) => r.covers), y);
+    sibs.splice(at, 0, ...members);
+    place(tx, members, sibs);
+  }
+}
+
+/** Whether the user resized or moved the boundary's frame since the last layout. */
+function reshaped(b: MMBoundary): boolean {
+  const d = boundaryData(b.el)!;
+  const shift = shiftOf(b.el, d);
+  if (!shift || d.lw === undefined || d.lh === undefined || b.el.customData?.[HIDDEN_KEY]) return false;
+  return isMove(shift) || isMove({ x: b.el.width - d.lw, y: b.el.height - d.lh });
+}
+
+/**
+ * A boundary whose frame the user resized takes in the sibling topics whose middle is now inside it,
+ * from the first to the last of them, and whole any boundary that range would partly overlap. With none inside,
+ * it keeps its topics.
+ */
+function fitBoundaries(tx: SceneTx, map: MindMap) {
+  for (const b of map.boundaries.values()) {
+    if (!reshaped(b)) continue;
+    const side = map.nodes.get(b.covers[0])?.side;
+    const sibs = b.parent.children.filter((c) => c.side === side); // top to bottom
+    const inside = sibs.flatMap((c, i) => (middleIn(c.el, b.el) ? [i] : []));
+    if (!inside.length) continue;
+    let from = Math.min(...inside);
+    let to = Math.max(...inside);
+    // Boundaries and summaries nest, so one the range would cut through is taken in whole.
+    const others = [...b.parent.boundaries.filter((o) => o !== b), ...b.parent.summaries].map((o) => o.covers);
+    for (let grown = true; grown; ) {
+      grown = false;
+      for (const covers of others) {
+        const idx = covers.map((id) => sibs.findIndex((c) => c.id === id));
+        if (idx.some((i) => i < 0)) continue;
+        const [lo, hi] = [Math.min(...idx), Math.max(...idx)];
+        const partly = lo <= to && hi >= from && !(lo >= from && hi <= to) && !(lo <= from && hi >= to);
+        if (!partly) continue;
+        [from, to] = [Math.min(from, lo), Math.max(to, hi)];
+        grown = true;
+      }
+    }
+    const covers = sibs.slice(from, to + 1).map((c) => c.id);
+    if (covers.length === b.covers.length && covers.every((id, i) => id === b.covers[i])) continue;
+    relist(tx, b, covers);
+  }
+}
+
+/** Whether the topic was dragged since the last layout, other than along with its parent. */
+function dragged(n: MMNode): boolean {
+  const own = shiftOf(n.el, n.data);
+  const base = (n.parent && shiftOf(n.parent.el, n.parent.data)) ?? { x: 0, y: 0 };
+  return !!own && isMove({ x: own.x - base.x, y: own.y - base.y });
+}
+
+/** A topic dragged out of the frame of one or more boundaries it belongs to, with those boundaries. */
+function boundaryLeaver(map: MindMap): { node: MMNode; left: MMBoundary[] } | null {
+  for (const n of map.nodes.values()) {
+    if (!n.parent || n.covers || isHidden(n) || !dragged(n)) continue;
+    const left = n.parent.boundaries.filter((b) => b.covers.includes(n.id) && !middleIn(n.el, b.el));
+    if (left.length) return { node: n, left };
+  }
+  return null;
+}
+
+/**
+ * Topics dragged out of a boundary's frame leave the boundary: they are taken off its list and put next to
+ * the topics it still encloses, after them when dropped below its middle, before them otherwise. A boundary
+ * left with no topics goes; one whose frame the topic is still in keeps it. Returns the topics that left.
+ */
+function leaveBoundaries(tx: SceneTx, map: MindMap): string[] {
+  const out: string[] = [];
+  let m = map;
+  // Each topic leaves at most once; the bound only guards against data that keeps a topic outside.
+  for (let found = boundaryLeaver(m); found && out.length < m.nodes.size; found = boundaryLeaver(m)) {
+    const { node: n, left } = found;
+    out.push(n.id);
+    const p = n.parent!;
+    for (const b of p.boundaries) {
+      if (left.includes(b)) {
+        if (b.covers.every((id) => id === n.id)) deleteBoundaryEls(tx, b);
+        else relist(tx, b, b.covers.filter((id) => id !== n.id));
+      } else if (b.covers.includes(n.id) && !boundaryData(b.el)!.topics.includes(n.id)) {
+        relist(tx, b, b.covers); // listed, it stays inside even when it moves to the end of the range
+      }
+    }
+
+    // Out of the range of the widest boundary it left, which takes in the narrower ones.
+    const widest = left.reduce((a, b) => (b.covers.length > a.covers.length ? b : a));
+    const rest = widest.covers.filter((id) => id !== n.id);
+    // And out of the summaries inside that boundary, which stay with the topics they still span there.
+    for (const sm of p.summaries) {
+      if (!sm.covers.includes(n.id) || sm.covers.length === 1 || !sm.covers.every((id) => widest.covers.includes(id))) continue;
+      relist(tx, sm, sm.covers.filter((id) => id !== n.id));
+    }
+    if (rest.length) {
+      const sibs = p.children.filter((c) => c.side === n.side && c !== n); // top to bottom
+      const below = middle(n.el).y > middle(widest.el).y;
+      const at = below ? sibs.findIndex((c) => c.id === rest[rest.length - 1]) + 1 : sibs.findIndex((c) => c.id === rest[0]);
+      sibs.splice(at, 0, n);
+      place(tx, [n], sibs, left);
+    }
+    m = buildMap(tx.live(), m.root.id)!;
+  }
+  return out;
+}
+
+/** A topic dragged above or below the brace of a summary it shares with other topics, with that summary. */
+function summaryLeaver(map: MindMap): { node: MMNode; summary: MMSummary } | null {
+  for (const n of map.nodes.values()) {
+    if (!n.parent || n.covers || isHidden(n) || !dragged(n)) continue;
+    const y = middle(n.el).y;
+    for (const sm of n.parent.summaries) {
+      const brace = map.braces.get(sm.node.id);
+      if (brace && sm.covers.length > 1 && sm.covers.includes(n.id) && (y < brace.y || y > brace.y + brace.height)) return { node: n, summary: sm };
+    }
+  }
+  return null;
+}
+
+/**
+ * Topics dragged above or below the brace of a summary leave it, going right before or after the topics it
+ * still spans; boundaries whose frame they are still in keep them. Returns the topics that left.
+ */
+function leaveSummaries(tx: SceneTx, map: MindMap): string[] {
+  const out: string[] = [];
+  let m = map;
+  // Each topic leaves at most once; the bound only guards against data that keeps a topic outside.
+  for (let found = summaryLeaver(m); found && out.length < m.nodes.size; found = summaryLeaver(m)) {
+    const { node: n, summary: sm } = found;
+    out.push(n.id);
+    const p = n.parent!;
+    const rest = sm.covers.filter((id) => id !== n.id);
+    relist(tx, sm, rest);
+    for (const b of p.boundaries) if (b.covers.includes(n.id) && !boundaryData(b.el)!.topics.includes(n.id)) relist(tx, b, b.covers);
+    const sibs = p.children.filter((c) => c.side === n.side && c !== n); // top to bottom
+    const below = middle(n.el).y > middle(m.braces.get(sm.node.id)!).y;
+    const at = below ? sibs.findIndex((c) => c.id === rest[rest.length - 1]) + 1 : sibs.findIndex((c) => c.id === rest[0]);
+    sibs.splice(at, 0, n);
+    place(tx, [n], sibs, [sm]);
+    m = buildMap(tx.live(), m.root.id)!;
+  }
+  return out;
+}
+
+/** A topic in no summary dragged next to the brace of a summary of its siblings, with that summary. */
+function summaryJoiner(map: MindMap): { node: MMNode; summary: MMSummary } | null {
+  for (const n of map.nodes.values()) {
+    if (!n.parent || n.covers || isHidden(n) || !dragged(n)) continue;
+    if (n.parent.summaries.some((sm) => sm.covers.includes(n.id))) continue; // summaries don't overlap
+    for (const sm of n.parent.summaries) {
+      const brace = map.braces.get(sm.node.id);
+      const topics = sm.covers.map((id) => map.nodes.get(id)!);
+      if (!brace || topics[0].side !== n.side) continue;
+      // From the topics it spans across to its brace.
+      const area = [brace, ...topics.map((t) => t.el)].map(boxOf).reduce((a, b) => {
+        const x = Math.min(a.x, b.x);
+        const y = Math.min(a.y, b.y);
+        return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+      });
+      if (middleIn(n.el, area)) return { node: n, summary: sm };
+    }
+  }
+  return null;
+}
+
+/**
+ * Topics dragged next to the brace of a summary join it: they are put among the topics it spans by height,
+ * clear of boundaries they aren't in, and added to its list. Returns the topics that joined.
+ */
+function joinSummaries(tx: SceneTx, map: MindMap): string[] {
+  const out: string[] = [];
+  let m = map;
+  // Each topic joins at most once; the bound only guards against data that keeps a topic inside.
+  for (let found = summaryJoiner(m); found && out.length < m.nodes.size; found = summaryJoiner(m)) {
+    const { node: n, summary: sm } = found;
+    out.push(n.id);
+    const p = n.parent!;
+    const y = middle(n.el).y;
+    const sibs = p.children.filter((c) => c.side === n.side && c !== n); // top to bottom
+    const from = sibs.findIndex((c) => c.id === sm.covers[0]);
+    const to = sibs.findIndex((c) => c.id === sm.covers[sm.covers.length - 1]);
+    let at = sibs.findIndex((c, i) => i >= from && i <= to && middle(c.el).y > y);
+    if (at < 0) at = to + 1;
+    at = clearOfRanges(at, sibs, p.boundaries.filter((b) => !b.covers.includes(n.id)).map((b) => b.covers), y);
+    sibs.splice(at, 0, n);
+    reorder(tx, n, sibs);
+    relist(tx, sm, [...sm.covers, n.id]);
+    m = buildMap(tx.live(), m.root.id)!;
+  }
+  return out;
+}
+
+/** Whether the boundary or summary lists the topic, rather than spanning it for being between two it lists. */
+const lists = (r: Range, id: string) => ("node" in r ? r.node.data.summary! : boundaryData(r.el)!.topics).includes(id);
+
+/**
+ * In an auto-aligned map, the topics dragged on their own go among their siblings by height. They stay
+ * within the boundaries and summaries they are in, and out of those they aren't.
+ */
+function reorderDropped(tx: SceneTx, map: MindMap) {
+  if (!autoAligned(map.root.data)) return;
+  const ids = [...map.nodes.values()].filter((n) => n.parent && !n.covers && !isHidden(n) && dragged(n)).map((n) => n.id);
+  let m = map;
+  for (const id of ids) {
+    const n = m.nodes.get(id)!;
+    const p = n.parent!;
+    const y = middle(n.el).y;
+    const sibs = p.children.filter((c) => c.side === n.side && c !== n); // top to bottom
+    const index = (cid: string) => sibs.findIndex((c) => c.id === cid);
+    let at = sibs.findIndex((c) => middle(c.el).y > y);
+    if (at < 0) at = sibs.length;
+    // Within the narrowest range it shares with other topics, listed so its end keeps it in.
+    const mine = rangesOf(p).filter((r) => r.covers.includes(n.id) && r.covers.length > 1);
+    for (const r of mine) if (!lists(r, n.id)) relist(tx, r, r.covers);
+    if (mine.length) {
+      const inner = mine.reduce((a, b) => (b.covers.length < a.covers.length ? b : a)).covers.filter((c) => c !== n.id);
+      at = Math.min(Math.max(at, index(inner[0])), index(inner[inner.length - 1]) + 1);
+    }
+    at = clearOfRanges(at, sibs, rangesOf(p).filter((r) => !r.covers.includes(n.id)).map((r) => r.covers), y);
+    sibs.splice(at, 0, n);
+    place(tx, [n], sibs);
+    m = buildMap(tx.live(), m.root.id)!;
+  }
+}
+
+/** Orders the topic's siblings on its side as given, top to bottom, in the line their orders place them in. */
+function reorder(tx: SceneTx, n: MMNode, sibs: MMNode[]) {
+  // The line holds this side's topics in slots of its own, bottom to top when reversed.
+  const { line, reversed } = orderLine(n);
+  const slots = line.flatMap((c, i) => (c.side === n.side ? [i] : []));
+  const shown = reversed ? [...sibs].reverse() : sibs;
+  slots.forEach((i, k) => (line[i] = shown[k]));
+  renumber(tx, line);
+}
+
+/**
+ * Puts the topics, one or a run of them, among their siblings on their side as given, top to bottom. Main
+ * topics of a balanced map in no range with other topics (once out of those they are leaving) could be sent
+ * to the other side by the balance, so they go to the nearest place that keeps them on their side instead.
+ */
+function place(tx: SceneTx, group: MMNode[], sibs: MMNode[], leaving: Range[] = []) {
+  const n = group[0];
+  const p = n.parent!;
+  const inGroup = (id: string) => group.some((g) => g.id === id);
+  const covers = rangesOf(p).map((r) => (leaving.includes(r) ? r.covers.filter((id) => !inGroup(id)) : r.covers));
+  const enclosed = covers.some((c) => c.length > group.length && group.every((g) => c.includes(g.id)));
+  if (p.parent || structureOf(p) !== "balanced" || enclosed) return reorder(tx, n, sibs);
+  const other = p.children.filter((c) => c.side !== n.side);
+  const [right, left] = n.side === "R" ? [sibs, other] : [other, sibs];
+  const line = [...right, ...[...left].reverse()]; // clockwise
+  const run = line.filter((c) => group.includes(c));
+  const rest = line.filter((c) => !group.includes(c));
+  const ranges = covers.filter((c) => !c.some(inGroup));
+  rest.splice(balancedPlace(rest, line.indexOf(run[0]), run, n.side as Side, ranges), 0, ...run);
+  renumber(tx, rest);
+}
+
+/**
+ * Where in a balanced map's clockwise line main topics go, one or a run of them kept together: the place
+ * given, or the nearest one where the balance leaves them on the given side; never inside a range of topics
+ * they aren't in.
+ */
+function balancedPlace(line: MMNode[], at: number, run: MMNode[], side: Side, ranges: string[][]): number {
+  const inside = rangesIn(line, ranges);
+  const together = [...ranges, run.map((n) => n.id)];
+  const fits = (i: number) => {
+    if (inside.some(([from, to]) => from < i && i <= to)) return false;
+    const l = [...line.slice(0, i), ...run, ...line.slice(i)];
+    const split = balancedSplit(l.length, rangesIn(l, together));
+    return side === "R" ? i + run.length <= split : i >= split;
+  };
+  for (let d = 0; d <= line.length; d++) for (const i of [at - d, at + d]) if (i >= 0 && i <= line.length && fits(i)) return i;
+  return at;
+}
+
+/** A topic dragged into the frame of one or more boundaries around its siblings, with those boundaries. */
+function boundaryJoiner(map: MindMap): { node: MMNode; join: MMBoundary[] } | null {
+  for (const n of map.nodes.values()) {
+    if (!n.parent || n.covers || isHidden(n) || !dragged(n)) continue;
+    const join = n.parent.boundaries.filter(
+      (b) => !b.covers.includes(n.id) && map.nodes.get(b.covers[0])?.side === n.side && middleIn(n.el, b.el),
+    );
+    if (join.length) return { node: n, join };
+  }
+  return null;
+}
+
+/**
+ * Topics dragged into the frame of a boundary around their siblings join it: they are put among the topics
+ * it encloses by height and added to its list. Returns the topics that joined.
+ */
+function joinBoundaries(tx: SceneTx, map: MindMap): string[] {
+  const out: string[] = [];
+  let m = map;
+  // Each topic joins at most once; the bound only guards against data that keeps a topic inside.
+  for (let found = boundaryJoiner(m); found && out.length < m.nodes.size; found = boundaryJoiner(m)) {
+    const { node: n, join } = found;
+    out.push(n.id);
+    const p = n.parent!;
+    const cy = (c: MMNode) => middle(c.el).y;
+    const sibs = p.children.filter((c) => c.side === n.side && c !== n); // top to bottom
+    const range = (ids: string[]) => ({ from: sibs.findIndex((c) => c.id === ids[0]), to: sibs.findIndex((c) => c.id === ids[ids.length - 1]) });
+
+    // By height within the narrowest boundary it joins, which the wider ones take in.
+    const narrowest = join.reduce((a, b) => (b.covers.length < a.covers.length ? b : a));
+    const r = range(narrowest.covers);
+    let at = sibs.findIndex((c, i) => i >= r.from && i <= r.to && cy(c) > cy(n));
+    if (at < 0) at = r.to + 1;
+    // Not inside the range of a boundary it isn't joining, or of a summary.
+    const others = rangesOf(p).filter((o) => !join.includes(o as MMBoundary) && !o.covers.includes(n.id));
+    at = clearOfRanges(at, sibs, others.map((o) => o.covers), cy(n));
+    sibs.splice(at, 0, n);
+    reorder(tx, n, sibs);
+    for (const b of join) relist(tx, b, [...b.covers, n.id]);
+    m = buildMap(tx.live(), m.root.id)!;
+  }
+  return out;
+}
+
+/**
+ * Main topics of a two-sided map dragged across the central topic change sides, going among the topics
+ * there by height. In a free map that is their side from now on; in a balanced one they get the place
+ * in the order that puts them on that side. Returns the topics that changed sides.
+ */
+function crossSides(tx: SceneTx, map: MindMap): string[] {
+  const structure = structureOf(map.root);
+  const crossed = crossedTopics(map);
+  if (!crossed.length) return [];
+  const cy = (n: MMNode) => middle(n.el).y;
+  const isCrossed = (id: string) => crossed.some((c) => c.id === id);
+
+  // It leaves the summaries it shares with topics staying behind; a summary of only crossing topics goes along.
+  for (const sm of map.root.summaries) {
+    const staying = sm.covers.filter((id) => !isCrossed(id));
+    if (staying.length && staying.length < sm.covers.length) relist(tx, sm, staying);
+  }
+  // The ranges of topics that stay where they are, which a topic coming over doesn't join.
+  const ranges = rangesOf(map.root).map((r) => r.covers.filter((id) => !isCrossed(id))).filter((c) => c.length);
+
+  // Topics crossing with all the others of a boundary or summary go over as one run, keeping it whole.
+  const runs: MMNode[][] = [];
+  for (const n of [...crossed].sort((a, b) => cy(a) - cy(b))) {
+    if (runs.some((r) => r.includes(n))) continue;
+    const whole = rangesOf(map.root).map((r) => r.covers).filter((c) => c.includes(n.id) && c.every(isCrossed));
+    runs.push(whole.reduce((a, b) => (b.length > a.length ? b : a), [n.id]).map((id) => map.nodes.get(id)!));
+  }
+
+  const target = (n: MMNode): Side => (crossed.includes(n) ? (n.side === "L" ? "R" : "L") : (n.side as Side));
+  const side = (s: Side) => {
+    const line = map.root.children.filter((n) => !crossed.includes(n) && n.side === s);
+    for (const run of runs.filter((r) => target(r[0]) === s)) {
+      const i = line.findIndex((m) => cy(m) > cy(run[0]));
+      line.splice(clearOfRanges(i < 0 ? line.length : i, line, ranges, cy(run[0])), 0, ...run);
+    }
+    return line;
+  };
+  const right = side("R");
+  const left = side("L");
+  if (structure === "free") {
+    for (const line of [right, left]) renumber(tx, line, (n) => (crossed.includes(n) ? { side: target(n) } : {}));
+    return crossed.map((n) => n.id);
+  }
+
+  // Clockwise, the first half of the order goes right. Each run goes to the place nearest where it was dropped
+  // that the balance leaves on its new side.
+  let line = [...right, ...left.reverse()];
+  for (const run of runs) {
+    const ordered = line.filter((c) => run.includes(c));
+    const rest = line.filter((c) => !run.includes(c));
+    rest.splice(balancedPlace(rest, line.indexOf(ordered[0]), ordered, target(run[0]), ranges), 0, ...ordered);
+    line = rest;
+  }
+  renumber(tx, line);
+  return crossed.map((n) => n.id);
+}
+
 /** Scene-space box of an element. */
 const boxOf = (el: El): Box => ({ x: el.x, y: el.y, w: el.width, h: el.height });
 
@@ -567,11 +1152,13 @@ const boxOf = (el: El): Box => ({ x: el.x, y: el.y, w: el.width, h: el.height })
  */
 function layoutRelations(tx: SceneTx, map: MindMap) {
   for (const el of tx.live()) {
-    const d = relationData(el);
-    if (!d || (!map.nodes.has(d.from) && !map.nodes.has(d.to))) continue;
+    const stored = relationData(el);
+    const d = stored && relationEnds(tx, el, stored);
+    if (!d || !inMap(map, d)) continue;
     const a = tx.get(d.from);
     const b = tx.get(d.to);
-    if (!a || a.isDeleted || !nodeData(a) || !b || b.isDeleted || !nodeData(b) || a === b) {
+    const valid = (x: El | undefined): x is El => !!x && !x.isDeleted && (!!nodeData(x) || !!boundaryData(x));
+    if (!valid(a) || !valid(b) || a === b) {
       deleteWithText(tx, el);
       continue;
     }
@@ -581,6 +1168,35 @@ function layoutRelations(tx: SceneTx, map: MindMap) {
     setHidden(tx, el.id, hidden);
     if (label) setHidden(tx, label.id, hidden);
   }
+}
+
+/** Whether either end of the relationship is a topic or boundary of the map. */
+const inMap = (map: MindMap, d: RelationData) =>
+  map.nodes.has(d.from) || map.nodes.has(d.to) || map.boundaries.has(d.from) || map.boundaries.has(d.to);
+
+/**
+ * The topics or boundaries a relationship runs between. When the user has bound an end to another one,
+ * that one, stored from now on; an end bound to anything else keeps what it had. An end bound to a
+ * boundary's title is glued to its frame instead, which the relationship is routed to.
+ */
+function relationEnds(tx: SceneTx, el: El, d: RelationData): RelationData {
+  const end = (key: "startBinding" | "endBinding", cur: string) => {
+    const b = tx.get(el.id)![key];
+    const t = b ? relationEnd(tx.get(b.elementId), (id) => tx.get(id)) : null;
+    if (!b || !t) return cur;
+    if (t.id !== b.elementId) {
+      tx.patch(el.id, { [key]: { ...b, elementId: t.id } });
+      removeBound(tx, b.elementId, el.id);
+      addBound(tx, t.id, el.id);
+    }
+    return t.id;
+  };
+  const from = end("startBinding", d.from);
+  const to = end("endBinding", d.to);
+  if ((from === d.from && to === d.to) || from === to) return d;
+  const ends = { ...d, from, to };
+  tx.patch(el.id, { customData: { ...tx.get(el.id)!.customData, [KEY]: ends } });
+  return ends;
 }
 
 /** The relationship's label. One Excalidraw just added gets the label color once; later the user's color stays. */
@@ -631,13 +1247,14 @@ export function followRelations(view: ExcalidrawView) {
   const sel = api.getAppState().selectedElementIds ?? {};
   const tx = new SceneTx(view);
   for (const el of els) {
-    const d = relationData(el);
-    if (!d || el.customData?.[HIDDEN_KEY]) continue;
+    const stored = relationData(el);
+    if (!stored || el.customData?.[HIDDEN_KEY]) continue;
+    const d = relationEnds(tx, el, stored);
     if (sel[el.id]) {
       labelOf(tx, el);
       const bend = relationBend(el.points ?? []);
       if (bend !== null && !near(bend, d.bend ?? RELATION_BEND))
-        tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, bend } } });
+        tx.patch(el.id, { customData: { ...tx.get(el.id)!.customData, [KEY]: { ...d, bend } } });
       continue;
     }
     const a = tx.get(d.from);
@@ -648,19 +1265,22 @@ export function followRelations(view: ExcalidrawView) {
   tx.commit("NEVER");
 }
 
-/** Draws a relationship from one topic to another, like XMind's Relationship, and selects it. */
+/** Draws a relationship from one topic or boundary to another, like XMind's Relationship, and selects it. */
 export async function addRelationship(view: ExcalidrawView, fromId: string, toId: string) {
   const id = run(view, (tx, ea) => {
-    const a = tx.get(fromId);
-    const b = tx.get(toId);
-    if (!nodeData(a) || !nodeData(b) || fromId === toId) return null;
-    const { start, mid, end } = relationPoints(boxOf(a!), boxOf(b!), RELATION_BEND);
+    const get = (i: string) => tx.get(i);
+    const a = relationEnd(tx.get(fromId), get);
+    const b = relationEnd(tx.get(toId), get);
+    if (!a || !b || a === b) return null;
+    fromId = a.id;
+    toId = b.id;
+    const { start, mid, end } = relationPoints(boxOf(a), boxOf(b), RELATION_BEND);
     ea.clear();
     Object.assign(ea.style, {
       strokeColor: relationshipColors().line,
       strokeWidth: 1.5,
       strokeStyle: "dashed",
-      roughness: a!.roughness,
+      roughness: a.roughness,
       roundness: { type: 2 }, // smooth curve through the points
       opacity: 100,
     });
@@ -764,7 +1384,7 @@ function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: Ou
     depth: 0,
     branch: branchColor(0),
     text,
-    data: { root: "", parent: null, order: 0 },
+    data: { root: "", parent: null, order: 0, ...newMapDefaults() },
     at: { x: c.x - 90, y: c.y - 30 },
     fontFamily: st.currentItemFontFamily,
     roughness: st.currentItemRoughness,
@@ -786,7 +1406,8 @@ export async function addChild(view: ExcalidrawView, parentId: string) {
     let side: Side | undefined;
     let branch: Branch;
     if (node.depth === 0) {
-      const right = node.children.filter((c) => c.side === "R").length;
+      // By the stored sides, so a map made one-sided comes out balanced when it is made free.
+      const right = node.children.filter((c) => (c.data.side ?? "R") === "R").length;
       side = right <= node.children.length - right ? "R" : "L";
       branch = branchColor(node.children.length);
     } else {
@@ -818,14 +1439,15 @@ export async function addSibling(view: ExcalidrawView, nodeId: string, above: bo
     if (!found?.node.parent || found.node.covers) return null; // summaries have no siblings
     const { map, node } = found;
     const parent = node.parent!;
-    const sibs = parent.children.filter((c) => c.side === node.side);
-    const i = sibs.indexOf(node);
-    const neighbour = above ? sibs[i - 1] : sibs[i + 1];
-    const order = neighbour ? (node.data.order + neighbour.data.order) / 2 : node.data.order + (above ? -1 : 1);
+    const { line, reversed } = orderLine(node);
+    const after = above === reversed; // below comes later in the order, unless the line runs bottom to top
+    const i = line.indexOf(node);
+    const neighbour = after ? line[i + 1] : line[i - 1];
+    const order = neighbour ? (node.data.order + neighbour.data.order) / 2 : node.data.order + (after ? 1 : -1);
     const id = createNode(tx, ea, {
       depth: node.depth,
       branch: node.depth === 1 ? branchColor(parent.children.length) : branchOf(node),
-      data: { root: map.root.id, parent: parent.id, order, ...(node.depth === 1 ? { side: node.side as Side } : {}) },
+      data: { root: map.root.id, parent: parent.id, order, ...(node.depth === 1 ? { side: node.data.side ?? (node.side as Side) } : {}) },
       at: { x: node.el.x, y: node.el.y + node.el.height + 10 },
       fontFamily: node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily,
       roughness: node.el.roughness,
@@ -928,32 +1550,70 @@ function removeTopic(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MM
 export async function moveNode(view: ExcalidrawView, nodeId: string, up: boolean) {
   const moved = run(view, (tx, ea) => {
     const found = mapOf(tx, nodeId);
-    if (!found?.node.parent || found.node.covers) return false;
-    const { map, node } = found;
-    const sibs = node.parent!.children.filter((c) => c.side === node.side);
-    const i = sibs.indexOf(node);
-    const j = up ? i - 1 : i + 1;
-    if (j < 0 || j >= sibs.length) return false;
-    [sibs[i], sibs[j]] = [sibs[j], sibs[i]];
-    // Renumber the side so equal or fractional orders can't keep the swap from taking effect.
-    sibs.forEach((s, k) => {
-      if (s.data.order !== k) tx.patch(s.id, { customData: { ...s.el.customData, [KEY]: { ...s.data, order: k } } });
-    });
-    layoutMap(tx, ea, map.root.id);
+    if (!found?.node.parent || found.node.covers || !moveRun(tx, [found.node], up)) return false;
+    layoutMap(tx, ea, found.map.root.id);
     return true;
   });
   if (moved) await focusNode(view, nodeId, false);
+}
+
+/** Moves the boundary with its topics one place up or down among their siblings, like Alt+Up/Down on a topic. */
+export async function moveBoundary(view: ExcalidrawView, boundaryId: string, up: boolean) {
+  const moved = run(view, (tx, ea) => {
+    const root = rootIdOf(tx.get(boundaryId));
+    const map = root ? buildMap(tx.live(), root) : null;
+    const b = map?.boundaries.get(boundaryId);
+    if (!map || !b || !moveRun(tx, b.covers.map((id) => map.nodes.get(id)!), up)) return false;
+    layoutMap(tx, ea, map.root.id);
+    return true;
+  });
+  if (moved) await focusNode(view, boundaryId, false);
+}
+
+/**
+ * Moves topics, one or a run of them top to bottom, one place up or down among their siblings. It never changes
+ * what they belong to: they stop at the end of a boundary or summary around them, and move past one they aren't
+ * in as a whole. Dragging takes them in or out. False when they can't move.
+ */
+function moveRun(tx: SceneTx, run: MMNode[], up: boolean): boolean {
+  const p = run[0].parent!;
+  const ids = new Set(run.map((n) => n.id));
+  const sibs = p.children.filter((c) => c.side === run[0].side); // top to bottom
+  const ranges = rangesOf(p).filter((r) => sibs.some((c) => c.id === r.covers[0]));
+  const front = (covers: string[]) => covers[up ? 0 : covers.length - 1]; // the end it moves toward
+  const back = (covers: string[]) => covers[up ? covers.length - 1 : 0];
+  const lead = front(run.map((n) => n.id));
+
+  const around = ranges.filter((r) => r.covers.length > ids.size && [...ids].every((id) => r.covers.includes(id)));
+  if (around.some((r) => front(r.covers) === lead)) return false;
+  const other = sibs[sibs.findIndex((c) => c.id === lead) + (up ? -1 : 1)];
+  if (!other) return false;
+  const blocks = ranges.filter((r) => !r.covers.some((id) => ids.has(id)) && back(r.covers) === other.id);
+  const widest = blocks.reduce<Range | null>((a, b) => (!a || b.covers.length > a.covers.length ? b : a), null);
+  const past = widest ? front(widest.covers) : other.id;
+  // Listed, so they stay in at the end of a range around them.
+  for (const r of around) if (![...ids].every((id) => lists(r, id))) relist(tx, r, r.covers);
+  const rest = sibs.filter((c) => !ids.has(c.id));
+  const k = rest.findIndex((c) => c.id === past);
+  rest.splice(up ? k : k + 1, 0, ...run);
+  place(tx, run, rest);
+  return true;
 }
 
 /**
  * Whether the nodes can get a summary or a boundary: one or more siblings on the same side,
  * not the central topic or a summary.
  */
-export function areSiblingTopics(nodes: El[]): boolean {
+export function areSiblingTopics(view: ExcalidrawView, nodes: El[]): boolean {
   const ds = nodes.map(nodeData);
   const first = ds[0];
   if (!first || ds.some((d) => !d || d.parent === null || d.summary)) return false;
-  return ds.every((d) => d!.root === first.root && d!.parent === first.parent && (d!.side ?? "R") === (first.side ?? "R"));
+  if (!ds.every((d) => d!.root === first.root && d!.parent === first.parent)) return false;
+  if (first.parent !== first.root || nodes.length === 1) return true;
+  // Main topics: by the sides they are shown on.
+  const map = buildMap(view.excalidrawAPI?.getSceneElements() ?? [], first.root);
+  const sides = nodes.map((n) => map?.nodes.get(n.id)?.side);
+  return !!sides[0] && sides.every((s) => s === sides[0]);
 }
 
 /** Adds a summary spanning the given sibling topics and everything between them, like XMind's Summary. */
@@ -1212,16 +1872,19 @@ export async function promote(view: ExcalidrawView, nodeId: string) {
     const target = parent.parent!;
     // Under a summary, the topic lands after the last topic the summary spans.
     const anchor = parent.covers ? map.nodes.get(parent.covers[parent.covers.length - 1])! : parent;
-    const sibs = target.children.filter((c) => c.side === anchor.side);
-    const next = sibs[sibs.indexOf(anchor) + 1];
-    const order = next ? (anchor.data.order + next.data.order) / 2 : anchor.data.order + 1;
+    const { line, reversed } = orderLine(anchor);
+    const i = line.indexOf(anchor);
+    const next = reversed ? line[i - 1] : line[i + 1]; // the topic below the anchor
+    const order = next ? (anchor.data.order + next.data.order) / 2 : anchor.data.order + (reversed ? -1 : 1);
     leaveRanges(tx, map, node);
     if (target === map.root) {
-      reparent(tx, node, target, order, anchor.side as Side);
+      reparent(tx, node, target, order, anchor.data.side ?? (anchor.side as Side));
       restyle(tx, map, node, 1, branchColor(target.children.length));
     } else {
       reparent(tx, node, target, order);
     }
+    // Next to the anchor, it joins the boundaries and summaries the anchor is in, except the summary it came from.
+    for (const r of rangesOf(target)) if (r.covers.includes(anchor.id) && !("node" in r && r.node === parent)) relist(tx, r, [...r.covers, node.id]);
     layoutMap(tx, ea, map.root.id);
     return true;
   });
@@ -1260,8 +1923,14 @@ export function changeLevel(view: ExcalidrawView, nodeId: string, dir: "left" | 
 // The Excalidraw plugin keeps the Markdown source, with [[links]], in rawText and shows it parsed.
 const topicText = (n: MMNode) => n.text?.rawText ?? n.text?.originalText ?? n.text?.text ?? "";
 
-/** Subtopics top to bottom, on the right side first for the central topic; summaries are left out. */
-const ordered = (n: MMNode) => (n.parent ? n.children : [...n.children.filter((c) => c.side !== "L"), ...n.children.filter((c) => c.side === "L")]);
+/**
+ * Subtopics top to bottom; for the central topic the right side first, or clockwise in a balanced map
+ * so they paste back the same. Summaries are left out.
+ */
+const ordered = (n: MMNode) =>
+  n.parent ? n.children
+  : structureOf(n) === "balanced" ? [...n.children].sort(byOrder)
+  : [...n.children.filter((c) => c.side !== "L"), ...n.children.filter((c) => c.side === "L")];
 
 const outlineOf = (n: MMNode): OutlineItem => ({ text: topicText(n), children: ordered(n).map(outlineOf) });
 
@@ -1291,7 +1960,7 @@ function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMN
   const fontFamily = node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily;
   const at = { x: node.el.x + node.el.width + 40, y: node.el.y };
   // Like addChild: main topics alternate sides and take the next branch color, others the color of their branch.
-  let right = node.children.filter((c) => c.side === "R").length;
+  let right = node.children.filter((c) => (c.data.side ?? "R") === "R").length;
   let count = node.children.length;
   const inherited = node.parent ? branchOf(node.covers ? map.nodes.get(node.covers[0])! : node) : null;
   const add = (parent: string, depth: number, branch: Branch, it: OutlineItem, order: number, side?: Side): string => {
@@ -1350,26 +2019,73 @@ export function relayout(view: ExcalidrawView, nodeId?: string) {
   });
 }
 
+/**
+ * The map laid out once more and read back, so what the user dragged since the last layout (sides, boundaries)
+ * is taken in before manual moves are dropped.
+ */
+function settledMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap | null {
+  return layoutMap(tx, ea, rootId) && buildMap(tx.live(), rootId);
+}
+
 /** Drops manual adjustments for the node's subtree, or for every map in the drawing. */
 export function resetLayout(view: ExcalidrawView, nodeId?: string) {
   run(view, (tx, ea) => {
-    const roots: string[] = [];
-    const targets: MMNode[] = [];
-    if (nodeId) {
-      const found = mapOf(tx, nodeId);
-      if (!found) return;
-      roots.push(found.map.root.id);
-      targets.push(...subtree(found.node));
-    } else {
-      for (const r of rootsIn(tx.live())) {
-        const map = buildMap(tx.live(), r);
-        if (!map) continue;
-        roots.push(r);
-        targets.push(...map.nodes.values());
-      }
+    const r = nodeId ? rootIdOf(tx.get(nodeId)) : null;
+    if (nodeId && !r) return;
+    for (const root of r ? [r] : rootsIn(tx.live())) {
+      const map = settledMap(tx, ea, root);
+      const node = map && (nodeId ? map.nodes.get(nodeId) : map.root);
+      if (!node) continue;
+      dropOffsets(tx, subtree(node));
+      layoutMap(tx, ea, root);
     }
-    dropOffsets(tx, targets);
-    for (const r of roots) layoutMap(tx, ea, r);
+  });
+}
+
+/**
+ * Gives the node's map another structure and resets its layout. The main topics keep the order they are
+ * shown in: clockwise from the top right in a balanced map, otherwise the right side top to bottom, then the left.
+ */
+export function setStructure(view: ExcalidrawView, nodeId: string, structure: Structure) {
+  run(view, (tx, ea) => {
+    const r = rootIdOf(tx.get(nodeId));
+    const settled = r ? settledMap(tx, ea, r) : null;
+    if (!r || !settled) return;
+    dropOffsets(tx, [...settled.nodes.values()]);
+    const map = buildMap(tx.live(), r)!;
+    const right = map.root.children.filter((c) => c.side === "R");
+    const left = map.root.children.filter((c) => c.side === "L");
+    renumber(tx, structure === "balanced" ? [...right, ...left.reverse()] : [...right, ...left]);
+    tx.patch(r, { customData: { ...map.root.el.customData, [KEY]: { ...map.root.data, structure } } });
+    layoutMap(tx, ea, r);
+  });
+}
+
+/** The central topic of the drawing's only map; null when it has none or several. */
+export function onlyMap(view: ExcalidrawView): string | null {
+  const roots = rootsIn(view.excalidrawAPI?.getSceneElements() ?? []);
+  return roots.length === 1 ? roots[0] : null;
+}
+
+/** The structure and auto-align of the node's map. */
+export function layoutOf(view: ExcalidrawView, nodeId: string | null): { structure: Structure; autoAlign: boolean } | null {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const root = nodeData(els.find((e) => e.id === nodeId))?.root;
+  const d = root ? nodeData(els.find((e) => e.id === root)) : null;
+  return d ? { structure: structureIn(d), autoAlign: autoAligned(d) } : null;
+}
+
+/** Turns auto-align of the node's map on, dropping every manual move, or off, keeping the positions as they are. */
+export function toggleAutoAlign(view: ExcalidrawView, nodeId: string) {
+  run(view, (tx, ea) => {
+    const r = rootIdOf(tx.get(nodeId));
+    const map = r ? settledMap(tx, ea, r) : null;
+    if (!r || !map) return;
+    const autoAlign = !autoAligned(map.root.data);
+    if (autoAlign) dropOffsets(tx, [...map.nodes.values()]);
+    const el = tx.get(r)!;
+    tx.patch(r, { customData: { ...el.customData, [KEY]: { ...nodeData(el)!, autoAlign } } });
+    layoutMap(tx, ea, r);
   });
 }
 
@@ -1404,9 +2120,10 @@ export function resetAll(view: ExcalidrawView, nodeId?: string) {
   run(view, (tx, ea) => {
     const r = nodeId ? rootIdOf(tx.get(nodeId)) : null;
     for (const root of r ? [r] : rootsIn(tx.live())) {
-      const map = buildMap(tx.live(), root);
-      if (map) restyleMap(tx, map);
-      if (map) dropOffsets(tx, [...map.nodes.values()]);
+      const map = settledMap(tx, ea, root);
+      if (!map) continue;
+      restyleMap(tx, map);
+      dropOffsets(tx, [...map.nodes.values()]);
       layoutMap(tx, ea, root);
     }
   });
@@ -1414,7 +2131,8 @@ export function resetAll(view: ExcalidrawView, nodeId?: string) {
 
 function restyleMap(tx: SceneTx, map: MindMap) {
   const branches = new Map<string, Branch>(); // topic id -> its branch
-  map.root.children.forEach((c, i) => branches.set(c.id, branchColor(i)));
+  // In their order: as they were added, or clockwise in a balanced map.
+  [...map.root.children].sort(byOrder).forEach((c, i) => branches.set(c.id, branchColor(i)));
   const visit = (n: MMNode, branch: Branch) => {
     applyNodeStyle(tx, n, n.depth === 0 ? styleFor(0, branch) : n.covers ? summaryStyle() : styleFor(n.depth, branch));
     for (const c of n.children) visit(c, branches.get(c.id) ?? branch);
@@ -1433,7 +2151,7 @@ function restyleMap(tx: SceneTx, map: MindMap) {
   }
   for (const el of tx.live()) {
     const d = relationData(el);
-    if (!d || (!map.nodes.has(d.from) && !map.nodes.has(d.to))) continue;
+    if (!d || !inMap(map, d)) continue;
     const color = relationshipColors();
     patchChanged(tx, el, { strokeColor: color.line, strokeWidth: 1.5, strokeStyle: "dashed", startArrowhead: null, endArrowhead: "arrow" });
     if (d.bend !== RELATION_BEND) tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, bend: RELATION_BEND } } });

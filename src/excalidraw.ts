@@ -4,6 +4,7 @@ import { ItemView, TFile, View } from "obsidian";
 
 export interface Binding {
   elementId: string;
+  fixedPoint?: [number, number] | null; // where on the element the arrow is glued, as fractions of its width and height
 }
 
 export type El = {
@@ -115,6 +116,7 @@ export class SceneTx {
   private readonly order: string[];
   private readonly dirty = new Set<string>();
   private readonly added: string[] = [];
+  private changes = 0;
 
   constructor(readonly view: ExcalidrawView) {
     this.api = view.excalidrawAPI!;
@@ -132,16 +134,23 @@ export class SceneTx {
     return [...this.cur.values()].filter((e) => !e.isDeleted);
   }
 
+  /** Counts every change, so a caller can tell whether a step changed anything. */
+  get revision(): number {
+    return this.changes;
+  }
+
   patch(id: string, p: Partial<El>) {
     const e = this.cur.get(id);
     if (!e) return;
     this.cur.set(id, { ...e, ...p });
     this.dirty.add(id);
+    this.changes++;
   }
 
   add(el: El) {
     this.cur.set(el.id, el);
     this.added.push(el.id);
+    this.changes++;
   }
 
   /** Position in the z-order, -1 for elements added in this transaction. */
@@ -153,6 +162,7 @@ export class SceneTx {
   insert(els: El[], index: number) {
     for (const el of els) this.cur.set(el.id, el);
     this.order.splice(index, 0, ...els.map((e) => e.id));
+    this.changes++;
   }
 
   delete(id: string) {

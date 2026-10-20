@@ -1,5 +1,6 @@
 import { Menu, setIcon } from "obsidian";
 import { Direction } from "./actions";
+import { STRUCTURES, Structure } from "./model";
 
 export interface PanelActions {
   newMap: () => void;
@@ -16,9 +17,10 @@ export interface PanelActions {
   paste: () => void;
   promote: () => void;
   demote: () => void;
-  relayout: () => void;
   reset: () => void;
   resetAll: () => void;
+  setStructure: (s: Structure) => void;
+  toggleAutoAlign: () => void;
   togglePause: () => void;
 }
 
@@ -27,13 +29,14 @@ export interface PanelState {
   root: boolean; // that node is the central topic
   summary: boolean; // that node is a summary topic
   topics: boolean; // one or more topics are selected, to copy
-  pair: boolean; // exactly two topics are selected, to connect with a relationship
+  pair: boolean; // exactly two topics or boundaries are selected, to connect with a relationship
   siblings: boolean; // the selection is one or more sibling topics that can get a summary or a boundary
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
   foldable: boolean; // that node can be collapsed or expanded
   collapsed: boolean; // that node is collapsed
   promote: boolean; // that node can be promoted to its parent's level
   demote: boolean; // that node can be demoted under the sibling above
+  layout: { structure: Structure; autoAlign: boolean } | null; // of the selected topic's map, or of the only map in the drawing
   canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
@@ -44,6 +47,7 @@ type Key = "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" 
 export class FloatingPanel {
   readonly el: HTMLElement;
   private readonly buttons = new Map<Key, HTMLButtonElement>();
+  private layout: PanelState["layout"] = null;
 
   constructor(a: PanelActions) {
     this.el = createDiv({ cls: "mm-panel" });
@@ -67,7 +71,7 @@ export class FloatingPanel {
     button(g2, "sibling", "plus", "Add sibling (Enter)", a.addSibling);
     button(g2, "summary", "braces", "Add summary of the selected topics", a.addSummary);
     button(g2, "boundary", "square-dashed", "Add boundary around the selected topics", a.addBoundary);
-    button(g2, "relation", "spline", "Add relationship from the first to the second selected topic", a.addRelationship);
+    button(g2, "relation", "spline", "Add relationship from the first to the second selected topic or boundary", a.addRelationship);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
     const gc = group();
@@ -83,10 +87,18 @@ export class FloatingPanel {
     button(gl, "demote", "indent-increase", "Demote under the topic above (Alt+arrow away from the central topic)", a.demote);
     const g4 = group();
     button(g4, "fold", "chevrons-down-up", "Collapse (Ctrl+/)", a.toggleFold);
-    button(g4, "layout", "refresh-cw", "Reset layout", (b) => {
+    button(g4, "layout", "sliders-horizontal", "Layout settings", (b) => {
       const menu = new Menu();
-      menu.addItem((i) => i.setTitle("Reset sizes only").setIcon("refresh-cw").onClick(a.relayout));
-      menu.addItem((i) => i.setTitle("Reset full layout").setIcon("rotate-ccw").onClick(a.reset));
+      const l = this.layout;
+      menu.addItem((i) => i.setTitle(l ? "Structure" : "Structure (select a topic of the map)").setIsLabel(true));
+      for (const [s, name] of Object.entries(STRUCTURES) as [Structure, string][])
+        menu.addItem((i) => i.setTitle(name).setChecked(l?.structure === s).setDisabled(!l).onClick(() => a.setStructure(s)));
+      menu.addSeparator();
+      menu.addItem((i) => i.setTitle("Auto-align").setChecked(!!l?.autoAlign).setDisabled(!l).onClick(a.toggleAutoAlign));
+      menu.addSeparator();
+      menu.addItem((i) =>
+        i.setTitle("Reset layout").setIcon("rotate-ccw").setDisabled(!!l?.autoAlign).onClick(a.reset),
+      );
       menu.addItem((i) => i.setTitle("Reset all").setIcon("eraser").onClick(a.resetAll));
       const r = b.getBoundingClientRect();
       menu.showAtPosition({ x: r.left, y: r.top }, b.doc);
@@ -117,6 +129,7 @@ export class FloatingPanel {
       for (const [k, b] of this.buttons) b.disabled = k !== "pause";
       return;
     }
+    this.layout = s.layout;
     const set = (k: Key, enabled: boolean) => (this.buttons.get(k)!.disabled = !enabled);
     set("newMap", true);
     set("layout", true);

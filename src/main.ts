@@ -1,24 +1,28 @@
-import { App, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem } from "obsidian";
+import { App, FuzzySuggestModal, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem } from "obsidian";
 import {
-  Direction, addBoundary, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
-  deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveNode, navigate, newMap,
-  newMapFromOutline, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
-  selectedNode, selectedNodes, selectedTopics, toggleFold, topicState, unfold,
+  Direction, addBoundary, afterDrag, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
+  deleteNode, deleteNodes, demote, editBoundaryTitle, editNode, editingNode, editingTitle, moveBoundary, moveNode, navigate, newMap,
+  newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
+  selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, layoutOf, toggleAutoAlign, toggleFold, topicState, unfold,
 } from "./actions";
 import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
-import { nodeData, titleData } from "./model";
+import { STRUCTURES, Structure, isStructure, nodeData, titleData } from "./model";
 import { isOutline } from "./outline";
 import { FloatingPanel, PanelActions } from "./panel";
-import { Colors, DEFAULT_COLORS, setArrows, setColors } from "./styles";
+import { Colors, DEFAULT_COLORS, setArrows, setColors, setMapDefaults } from "./styles";
 
 interface Settings {
   showPanelOnDesktop: boolean;
   allowDeleteCentralTopic: boolean;
   arrows: boolean; // connectors end in an arrowhead instead of a plain line
+  structure: Structure; // of new maps
+  autoAlign: boolean; // of new maps
   colors: Colors;
 }
 
-const DEFAULT_SETTINGS: Settings = { showPanelOnDesktop: true, allowDeleteCentralTopic: false, arrows: false, colors: DEFAULT_COLORS };
+const DEFAULT_SETTINGS: Settings = {
+  showPanelOnDesktop: true, allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true, colors: DEFAULT_COLORS,
+};
 
 /** Saved settings over the defaults; colors are merged per field so new color options get their default. */
 function mergeSettings(saved: Partial<Settings> | null): Settings {
@@ -34,7 +38,9 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
       : { ...DEFAULT_COLORS.relationship, ...c.relationship },
     branches: c.branches?.length ? c.branches : DEFAULT_COLORS.branches,
   });
-  return { ...DEFAULT_SETTINGS, ...saved, colors };
+  const merged = { ...DEFAULT_SETTINGS, ...saved, colors };
+  if (!isStructure(merged.structure)) merged.structure = DEFAULT_SETTINGS.structure;
+  return merged;
 }
 
 interface ViewState {
@@ -67,6 +73,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.settings = mergeSettings((await this.loadData()) as Partial<Settings> | null);
     setColors(this.settings.colors);
     setArrows(this.settings.arrows);
+    setMapDefaults({ structure: this.settings.structure, autoAlign: this.settings.autoAlign });
     this.addSettingTab(new MindMapSettingTab(this.app, this));
 
     this.keyScope = new Scope(this.app.scope);
@@ -80,6 +87,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const listen = (win: Window) => {
       this.registerDomEvent(win, "keydown", this.onKeyDown, { capture: true });
       for (const type of ["copy", "cut", "paste"] as const) this.registerDomEvent(win, type, this.onClipboard, { capture: true });
+      this.registerDomEvent(win, "pointerup", this.onPointerUp, { capture: true });
     };
     listen(window);
     this.registerEvent(this.app.workspace.on("window-open", (_w, win) => listen(win)));
@@ -128,7 +136,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     });
     this.addCommand({
       id: "add-relationship",
-      name: "Add relationship between the two selected topics",
+      name: "Add relationship between the two selected topics or boundaries",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.relate(v)),
     });
     this.addCommand({
@@ -150,6 +158,16 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       id: "demote",
       name: "Demote selected topic under the topic above",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => demote(v, id))),
+    });
+    this.addCommand({
+      id: "change-structure",
+      name: "Change structure of the mind map",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnMap(v, (id) => this.chooseStructure(v, id))),
+    });
+    this.addCommand({
+      id: "toggle-auto-align",
+      name: "Turn auto-align of the mind map on or off",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnMap(v, (id) => toggleAutoAlign(v, id))),
     });
     this.addCommand({
       id: "relayout",
@@ -178,6 +196,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   async saveSettings() {
     setColors(this.settings.colors);
     setArrows(this.settings.arrows);
+    setMapDefaults({ structure: this.settings.structure, autoAlign: this.settings.autoAlign });
     await this.saveData(this.settings);
     for (const s of this.states.values()) this.refreshPanel(s);
   }
@@ -314,8 +333,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       root: !!node && nodeData(node)?.parent === null,
       summary: !!node && !!nodeData(node)?.summary,
       topics: !editing && selectedTopics(s.view).length > 0,
-      pair: !editing && selected.length === 2,
-      siblings: areSiblingTopics(selected),
+      pair: !editing && selectedEnds(s.view).length === 2,
+      siblings: areSiblingTopics(s.view, selected),
+      layout: layoutOf(s.view, node?.id ?? onlyMap(s.view)),
       boundary: !editing && !!selectedBoundary(s.view),
       ...t,
       canDeleteRoot: this.settings.allowDeleteCentralTopic,
@@ -341,6 +361,22 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (node) action(node.id);
   }
 
+  /**
+   * Runs an action on the map of the selected topic, or on the drawing's only map when no topic is selected;
+   * with several maps, a topic has to say which.
+   */
+  private runOnMap(view: ExcalidrawView, action: (nodeId: string) => unknown) {
+    if (editingNode(view) || selectedNode(view)) return this.runOnNode(view, action);
+    const root = onlyMap(view);
+    if (root) action(root);
+    else new Notice("Select a topic of the mind map to change.");
+  }
+
+  /** Lets the user pick a structure for the node's map. */
+  private chooseStructure(view: ExcalidrawView, nodeId: string) {
+    new StructureModal(this.app, layoutOf(view, nodeId)?.structure ?? null, (s) => setStructure(view, nodeId, s)).open();
+  }
+
   /** Adds a summary spanning the selected topics, or the topic being edited. */
   private summarize(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => addSummary(view, [id]));
@@ -353,11 +389,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     void addBoundary(view, selectedNodes(view).map((n) => n.id));
   }
 
-  /** Connects the two selected topics with a relationship, from the first selected to the second. */
+  /** Connects the two selected topics or boundaries with a relationship, from the first selected to the second. */
   private relate(view: ExcalidrawView) {
-    const nodes = selectedNodes(view);
-    if (nodes.length !== 2) return void new Notice("Select two topics to connect.");
-    void addRelationship(view, nodes[0].id, nodes[1].id);
+    const ends = selectedEnds(view);
+    if (ends.length !== 2) return void new Notice("Select two topics or boundaries to connect.");
+    void addRelationship(view, ends[0], ends[1]);
   }
 
   /** Edits the selected node's text, or the selected boundary's title. */
@@ -462,12 +498,23 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       paste: () => void this.paste(view),
       promote: () => this.runOnNode(view, (id) => promote(view, id)),
       demote: () => this.runOnNode(view, (id) => demote(view, id)),
-      relayout: () => relayout(view, selectedNode(view)?.id),
       reset: () => resetLayout(view, selectedNode(view)?.id),
       resetAll: () => resetAll(view, selectedNode(view)?.id),
+      setStructure: (st) => this.runOnMap(view, (id) => setStructure(view, id, st)),
+      toggleAutoAlign: () => this.runOnMap(view, (id) => toggleAutoAlign(view, id)),
       togglePause: () => this.togglePause(),
     };
   }
+
+  /** Lays out the maps where something was just moved, so subtopics follow and the drop takes effect. */
+  private onPointerUp = () => {
+    const view = this.activeView();
+    if (this.paused || !view) return;
+    window.setTimeout(() => {
+      const st = view.excalidrawAPI?.getAppState();
+      if (st && !st.viewModeEnabled && !st.editingTextElement) afterDrag(view);
+    }, 0);
+  };
 
   // ---------- keyboard ----------
 
@@ -495,8 +542,17 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
       action = (id) => toggleFold(view, id);
     } else if (reorder) {
-      if (appState.editingTextElement || !selectedNode(view)) return;
+      if (appState.editingTextElement) return;
       if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
+      const boundary = selectedBoundary(view);
+      if (boundary) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        void moveBoundary(view, boundary, e.key === "ArrowUp");
+        return;
+      }
+      if (!selectedNode(view)) return;
       action = (id) => moveNode(view, id, e.key === "ArrowUp");
     } else if (level) {
       if (appState.editingTextElement || !selectedNode(view)) return;
@@ -572,6 +628,25 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   };
 }
 
+class StructureModal extends FuzzySuggestModal<Structure> {
+  constructor(app: App, private current: Structure | null, private choose: (s: Structure) => void) {
+    super(app);
+    this.setPlaceholder("Structure of the mind map");
+  }
+
+  getItems(): Structure[] {
+    return Object.keys(STRUCTURES) as Structure[];
+  }
+
+  getItemText(s: Structure): string {
+    return s === this.current ? `${STRUCTURES[s]} (current)` : STRUCTURES[s];
+  }
+
+  onChooseItem(s: Structure) {
+    this.choose(s);
+  }
+}
+
 class MindMapSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ExcalidrawMindMapPlugin) {
     super(app, plugin);
@@ -602,6 +677,16 @@ class MindMapSettingTab extends PluginSettingTab {
         name: "Allow deleting the central topic",
         desc: "Deleting the central topic removes the whole mind map: every topic and connector.",
         control: { type: "toggle", key: "allowDeleteCentralTopic" },
+      },
+      {
+        name: "Structure of new maps",
+        desc: "How main topics are placed around the central topic. Each map keeps its own, changed from the panel's layout settings or the command palette.",
+        control: { type: "dropdown", key: "structure", options: STRUCTURES },
+      },
+      {
+        name: "Auto-align new maps",
+        desc: "Topics always keep their automatic places: dropping a topic moves it among its siblings instead of leaving it where it is dropped. Each map keeps its own, changed from the panel's layout settings or the command palette.",
+        control: { type: "toggle", key: "autoAlign" },
       },
       {
         name: "Arrows instead of lines",

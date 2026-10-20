@@ -55,7 +55,7 @@ export const SUMMARY_GAP = 12; // brace tip to summary topic
 export const BOUNDARY_PAD = 10; // enclosed subtrees to boundary frame
 export const TITLE_INSET = 14; // frame's left edge to its title tab
 export const TITLE_OVERLAP = 2; // title tab reaching down over the frame's top edge
-const MOVE_EPSILON = 0.5;
+export const MOVE_EPSILON = 0.5; // less than this from where the layout put it is not a manual move
 
 const vGap = (depth: number) => (depth <= 1 ? V_GAP_L1 : V_GAP);
 

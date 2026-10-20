@@ -7,12 +7,27 @@ export const KEY = "mindmap";
 // Elements hidden by a folded topic keep their own opacity and lock state here, to restore when shown again.
 export const HIDDEN_KEY = "mindmapHidden";
 
+/**
+ * How the main topics are placed around the central topic: on both sides, balanced by their order
+ * or each on the side it was put on, or all on one side.
+ */
+export type Structure = "balanced" | "free" | "right" | "left";
+
+export const STRUCTURES: Record<Structure, string> = {
+  balanced: "Balanced",
+  free: "Free",
+  right: "Right",
+  left: "Left",
+};
+
 export interface NodeData {
   self: string; // element id at creation, a mismatch means the element is a pasted or duplicated copy
   root: string;
   parent: string | null;
   order: number;
-  side?: Side; // level-1 nodes only
+  side?: Side; // level-1 nodes only: the side in a free map, kept while the map has another structure
+  structure?: Structure; // central topic only, free when not set: maps made before there were structures
+  autoAlign?: boolean; // central topic only: no topic keeps a manual position; off when not set, as in maps made before
   summary?: string[]; // summary topic: ids of the siblings it spans, the range runs from the first to the last still present
   folded?: boolean; // subtopics, summaries and boundaries are hidden
   ox?: number; // manual offset
@@ -34,6 +49,10 @@ export interface BoundaryData {
   root: string;
   parent: string;
   topics: string[]; // the range runs from the first to the last still present among the parent's children
+  lx?: number; // frame as the layout last placed it, to tell when the user resized or moved it
+  ly?: number;
+  lw?: number;
+  lh?: number;
 }
 
 export interface TitleData {
@@ -91,6 +110,7 @@ export interface MMSummary {
 }
 
 export interface MMNode extends LNode {
+  side: Side | null; // the side shown, which only a free map takes from the stored one
   el: El;
   text: El | null;
   data: NodeData;
@@ -177,6 +197,50 @@ export function boundTextId(el: El): string | undefined {
   return el.boundElements?.find((b) => b.type === "text")?.id;
 }
 
+export const isStructure = (s: unknown): s is Structure => typeof s === "string" && Object.prototype.hasOwnProperty.call(STRUCTURES, s);
+
+/** The structure of the map with this central topic; maps made before there were structures, or with one unknown to this version, are free. */
+export const structureIn = (root: NodeData): Structure => (isStructure(root.structure) ? root.structure : "free");
+
+export const structureOf = (root: MMNode): Structure => structureIn(root.data);
+
+/** Whether the map with this central topic is auto-aligned: every topic in its automatic place, a drop only reorders. */
+export const autoAligned = (root: NodeData): boolean => root.autoAlign === true;
+
+/** Whether the main topics go on both sides of the central topic. */
+export const twoSided = (s: Structure) => s === "balanced" || s === "free";
+
+export const byOrder = (a: MMNode, b: MMNode) => a.data.order - b.data.order;
+
+/**
+ * The node's siblings in the order they are numbered in. In a balanced map that is all the main topics
+ * clockwise from the top right, so on the left side the line runs bottom to top (reversed). Otherwise it is
+ * the siblings on the node's side, top to bottom.
+ */
+export function orderLine(n: MMNode): { line: MMNode[]; reversed: boolean } {
+  const p = n.parent!;
+  if (!p.parent && structureOf(p) === "balanced") return { line: [...p.children].sort(byOrder), reversed: n.side === "L" };
+  return { line: p.children.filter((c) => c.side === n.side), reversed: false };
+}
+
+/** Where the topics listed run in the line, first to last, for each list with any of them in it. */
+export function rangesIn(line: { id: string }[], lists: string[][]): [number, number][] {
+  return lists
+    .map((ids) => ids.map((id) => line.findIndex((n) => n.id === id)).filter((i) => i >= 0))
+    .filter((idx) => idx.length)
+    .map((idx) => [Math.min(...idx), Math.max(...idx)]);
+}
+
+/**
+ * How many of a balanced map's main topics go right: half, rounded up, or as near to it as keeps every range
+ * (the topics of a boundary or summary) on one side.
+ */
+export function balancedSplit(count: number, ranges: [number, number][]): number {
+  const half = Math.ceil(count / 2);
+  const cuts = (k: number) => ranges.some(([from, to]) => from < k && k <= to);
+  for (let d = 0; ; d++) for (const k of [half + d, half - d]) if (k >= 0 && k <= count && !cuts(k)) return k;
+}
+
 /** Resolves a selected element (node container or its text) to the mind map node element. */
 export function resolveNodeElement(el: El | undefined, byId: Map<string, El>): El | null {
   if (!el) return null;
@@ -214,14 +278,34 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     else p.children.push(n);
   }
 
+  // Sides of the main topics: fixed in a one-sided map, in a balanced one the first half of the order
+  // goes right and the rest left, clockwise. A free map keeps the stored sides.
+  const structure = structureOf(root);
+  const fixed: Side | null = structure === "right" ? "R" : structure === "left" ? "L" : null;
+  const sides = new Map<string, Side>();
+  if (structure === "balanced") {
+    const mains = [...root.children].sort(byOrder);
+    const lists = [
+      ...elements.filter((e) => !e.isDeleted && boundaryData(e)?.root === rootId && boundaryData(e)?.parent === rootId).map((e) => boundaryData(e)!.topics),
+      ...summaries.filter((s) => s.parent === root).map((s) => s.data.summary!),
+    ];
+    const half = balancedSplit(mains.length, rangesIn(mains, lists));
+    mains.forEach((c, i) => sides.set(c.id, i < half ? "R" : "L"));
+  }
+  const sideOf = (n: MMNode): Side => fixed ?? sides.get(n.id) ?? n.data.side ?? "R";
+  // Siblings on one side top to bottom: a balanced map's left side runs against the order.
+  const topDown = (p: MMNode) => (a: MMNode, b: MMNode) =>
+    p === root && structure === "balanced" && sideOf(a) === "L" ? b.data.order - a.data.order : a.data.order - b.data.order;
+
   // A summary spans the siblings (on its side) from the first to the last one it lists that still exist.
-  // Without any, it stays as an ordinary topic.
-  const sideOf = (n: MMNode) => n.data.side ?? "R";
+  // Without any, it stays as an ordinary topic. A summary of main topics is on the side of the first one it lists.
   for (const s of summaries) {
     const p = s.parent!;
+    const listed = p === root ? s.data.summary!.map((id) => nodes.get(id)).find((c) => c?.parent === root) : undefined;
+    if (listed) sides.set(s.id, sideOf(listed));
     const sibs = p.children
       .filter((c) => p !== root || sideOf(c) === sideOf(s))
-      .sort((a, b) => a.data.order - b.data.order);
+      .sort(topDown(p));
     const idx = s.data.summary!.map((id) => sibs.findIndex((c) => c.id === id)).filter((i) => i >= 0);
     if (!idx.length) {
       p.children.push(s);
@@ -254,7 +338,9 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     n.depth = depth;
     n.side = side;
     n.folded = depth > 0 && !!n.data.folded && (n.children.length > 0 || n.summaries.length > 0);
-    n.children.sort((a, b) => a.data.order - b.data.order);
+    // Top to bottom, the right side first.
+    const order = topDown(n);
+    n.children.sort((a, b) => (depth > 0 || sideOf(a) === sideOf(b) ? order(a, b) : sideOf(a) === "R" ? -1 : 1));
     for (const c of n.children) finish(c, depth + 1, depth === 0 ? sideOf(c) : side);
     for (const s of n.summaries) finish(s.node, depth + 1, depth === 0 ? sideOf(s.node) : side);
   };
