@@ -1,48 +1,64 @@
-import { App, FuzzySuggestModal, ItemView, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem } from "obsidian";
 import {
-  Direction, addBoundary, afterDrag, addChild, addRelationship, followRelations, addSibling, addSummary, areSiblingTopics, changeLevel, commitEditing, deleteBoundary,
-  deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, editNode, editingNode, editingTitle, isLoneCentral, moveBoundary, moveNode, navigate, newMap,
-  newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote, relayout, resetAll, resetLayout, selectedBadge, selectedBoundary,
-  selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, layoutOf, toggleAutoAlign, toggleFold, topicState, unfold,
+  App, FuzzySuggestModal, ItemView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem, SettingDefinitionPage,
+  normalizePath,
+} from "obsidian";
+import {
+  Direction, addBoundary, addCallout, afterDrag, addChild, addRelationship, canAddCallout, followCallouts, followRelations, addSibling, addSummary, areSiblingTopics,
+  changeLevel, commitEditing, deleteBoundary, deleteCallout, deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, editCallout, editNode,
+  editingCallout, editingNode, editingTitle, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
+  relayout, resetAll, resetLayout, selectedBadge, selectedBoundary, selectedCallout, selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, setTheme,
+  layoutOf, toggleAutoAlign, toggleFold, topicState, unfold,
 } from "./actions";
 import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
-import { STRUCTURES, Structure, isStructure, nodeData, titleData } from "./model";
+import { STRUCTURES, Structure, calloutData, isStructure, nodeData, titleData } from "./model";
 import { isOutline } from "./outline";
-import { FloatingPanel, PANEL_POSITIONS, PanelActions, PanelPosition, isPanelPosition } from "./panel";
-import { Colors, DEFAULT_COLORS, setArrows, setColors, setMapDefaults } from "./styles";
+import { FloatingPanel, PANEL_POSITIONS, PANEL_STYLES, PanelActions, PanelPosition, PanelStyle, isPanelPosition, isPanelStyle, themeTitle } from "./panel";
+import {
+  CUSTOM_THEME, Colors, DEFAULT_COLORS, Theme, UserTheme, colorsOf, isPreset, mergeColors, newThemeId, parseThemes, setArrows, setMapDefaults, setUserThemes,
+  themeOptions, themesToJson, uniqueName,
+} from "./styles";
 
 interface Settings {
   showPanelOnDesktop: boolean;
   panelPosition: PanelPosition;
+  panelStyle: PanelStyle;
   allowDeleteCentralTopic: boolean;
   arrows: boolean; // connectors end in an arrowhead instead of a plain line
   structure: Structure; // of new maps
   autoAlign: boolean; // of new maps
-  colors: Colors;
+  theme: Theme; // of new maps
+  themes: UserTheme[]; // the user's own, after the presets
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  showPanelOnDesktop: true, panelPosition: "bottom", allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true, colors: DEFAULT_COLORS,
+  showPanelOnDesktop: true, panelPosition: "bottom", panelStyle: "default", allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true,
+  theme: CUSTOM_THEME, themes: [{ id: CUSTOM_THEME, name: "Custom", colors: DEFAULT_COLORS }],
 };
 
-/** Saved settings over the defaults; colors are merged per field so new color options get their default. */
-function mergeSettings(saved: Partial<Settings> | null): Settings {
-  const c: Partial<Colors> = saved?.colors ?? {};
-  const colors: Colors = structuredClone({
-    central: { ...DEFAULT_COLORS.central, ...c.central },
-    topicText: c.topicText ?? DEFAULT_COLORS.topicText,
-    summary: { ...DEFAULT_COLORS.summary, ...c.summary },
-    boundary: { ...DEFAULT_COLORS.boundary, ...c.boundary },
-    // Before it had a text color, the relationship color was a single string for both.
-    relationship: typeof c.relationship === "string"
-      ? { line: c.relationship, text: c.relationship }
-      : { ...DEFAULT_COLORS.relationship, ...c.relationship },
-    branches: c.branches?.length ? c.branches : DEFAULT_COLORS.branches,
-  });
-  const merged = { ...DEFAULT_SETTINGS, ...saved, colors };
+/**
+ * Saved settings over the defaults; theme colors are merged per field so new color options get their default.
+ * Before themes, the settings had one set of colors: they become the Custom theme, which maps made then have.
+ */
+function mergeSettings(saved: (Partial<Settings> & { colors?: unknown }) | null): Settings {
+  const { colors: legacy, ...rest } = saved ?? {};
+  const merged: Settings = { ...DEFAULT_SETTINGS, ...rest };
+  const themes: unknown[] = Array.isArray(saved?.themes) ? saved.themes : [{ id: CUSTOM_THEME, name: "Custom", colors: legacy }];
+  merged.themes = [];
+  for (const t of themes as Partial<UserTheme>[]) {
+    if (!t || typeof t.id !== "string" || !t.id || isPreset(t.id) || merged.themes.some((x) => x.id === t.id)) continue;
+    merged.themes.push({ id: t.id, name: typeof t.name === "string" && t.name.trim() ? t.name : "Theme", colors: mergeColors(t.colors) });
+  }
   if (!isStructure(merged.structure)) merged.structure = DEFAULT_SETTINGS.structure;
   if (!isPanelPosition(merged.panelPosition)) merged.panelPosition = DEFAULT_SETTINGS.panelPosition;
+  if (!isPanelStyle(merged.panelStyle)) merged.panelStyle = DEFAULT_SETTINGS.panelStyle;
+  merged.theme = validTheme(merged.theme, merged.themes);
   return merged;
+}
+
+/** The theme, or when it is no preset or theme of the user's, Custom if there is one, Classic otherwise. */
+function validTheme(theme: unknown, themes: UserTheme[]): Theme {
+  if (typeof theme === "string" && (isPreset(theme) || themes.some((t) => t.id === theme))) return theme;
+  return themes.some((t) => t.id === CUSTOM_THEME) ? CUSTOM_THEME : "classic";
 }
 
 interface ViewState {
@@ -75,9 +91,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
   async onload() {
     this.settings = mergeSettings((await this.loadData()) as Partial<Settings> | null);
-    setColors(this.settings.colors);
-    setArrows(this.settings.arrows);
-    setMapDefaults({ structure: this.settings.structure, autoAlign: this.settings.autoAlign });
+    this.applySettings();
     this.addSettingTab(new MindMapSettingTab(this.app, this));
 
     this.keyScope = new Scope(this.app.scope);
@@ -156,6 +170,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.bound(v)),
     });
     this.addCommand({
+      id: "add-callout",
+      name: "Add callout to selected topic",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => addCallout(v, id))),
+    });
+    this.addCommand({
       id: "toggle-fold",
       name: "Collapse or expand selected topic",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => toggleFold(v, id))),
@@ -176,6 +195,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnMap(v, (id) => this.chooseStructure(v, id))),
     });
     this.addCommand({
+      id: "change-theme",
+      name: "Change theme of the mind map",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnMap(v, (id) => this.chooseTheme(v, id))),
+    });
+    this.addCommand({
       id: "toggle-auto-align",
       name: "Turn auto-align of the mind map on or off",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnMap(v, (id) => toggleAutoAlign(v, id))),
@@ -192,7 +216,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     });
     this.addCommand({
       id: "reset-all",
-      name: "Reset all: layout, colors and styles of the mind map from the settings",
+      name: "Reset all: layout, colors and styles of the mind map from its theme",
       checkCallback: (checking) => this.withActiveView(checking, (v) => resetAll(v, selectedNode(v)?.id)),
     });
   }
@@ -205,11 +229,15 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   }
 
   async saveSettings() {
-    setColors(this.settings.colors);
-    setArrows(this.settings.arrows);
-    setMapDefaults({ structure: this.settings.structure, autoAlign: this.settings.autoAlign });
+    this.applySettings();
     await this.saveData(this.settings);
     for (const s of this.states.values()) this.refreshPanel(s);
+  }
+
+  private applySettings() {
+    setUserThemes(this.settings.themes);
+    setArrows(this.settings.arrows);
+    setMapDefaults({ structure: this.settings.structure, autoAlign: this.settings.autoAlign, theme: this.settings.theme });
   }
 
   private activeView(): ExcalidrawView | null {
@@ -231,7 +259,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const view = this.activeView();
     const active =
       !this.paused && !!view && !view.excalidrawAPI!.getAppState().editingTextElement &&
-      (!!selectedNode(view) || !!selectedBoundary(view));
+      (!!selectedNode(view) || !!selectedBoundary(view) || !!selectedCallout(view));
     if (active && !this.scopePushed) this.app.keymap.pushScope(this.keyScope);
     if (!active && this.scopePushed) this.app.keymap.popScope(this.keyScope);
     this.scopePushed = active;
@@ -308,7 +336,10 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       s.raf = window.requestAnimationFrame(() => {
         s.raf = 0;
         this.checkBadge(s);
-        if (!this.paused && !s.api.getAppState().editingTextElement) followRelations(s.view);
+        if (!this.paused && !s.api.getAppState().editingTextElement) {
+          followRelations(s.view);
+          followCallouts(s.view);
+        }
         this.showDropTarget(s);
         this.refreshPanel(s);
       });
@@ -348,7 +379,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     s.pending = null;
     if (this.paused) return;
     const el = s.api.getSceneElements().find((e) => e.id === containerId);
-    if (!nodeData(el) && !titleData(el)) return;
+    if (!nodeData(el) && !titleData(el) && !calloutData(el)) return;
+    // A callout edited to nothing goes, like an empty text in Excalidraw.
+    if (isEmptyCallout(s.view, containerId)) return void deleteCallout(s.view, containerId);
     relayout(s.view, containerId);
     pending?.(containerId);
   }
@@ -358,6 +391,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const visible = (Platform.isMobile || this.settings.showPanelOnDesktop) && !s.api.getAppState().viewModeEnabled;
     s.panel.setVisible(visible);
     s.panel.setPosition(this.settings.panelPosition);
+    s.panel.setStyle(this.settings.panelStyle);
     if (!visible) return;
     const editing = editingNode(s.view);
     const selected = editing ? [editing] : selectedNodes(s.view);
@@ -372,6 +406,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       siblings: areSiblingTopics(s.view, selected),
       layout: layoutOf(s.view, node?.id ?? onlyMap(s.view)),
       boundary: !editing && !!selectedBoundary(s.view),
+      callout: !editing && !!selectedCallout(s.view),
+      calloutable: !!node && canAddCallout(s.view, node.id),
       ...t,
       canDeleteRoot: this.settings.allowDeleteCentralTopic || (!!node && isLoneCentral(s.view, node.id)),
       paused: this.paused,
@@ -412,6 +448,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     new StructureModal(this.app, layoutOf(view, nodeId)?.structure ?? null, (s) => setStructure(view, nodeId, s)).open();
   }
 
+  /** Lets the user pick a theme for the node's map. */
+  private chooseTheme(view: ExcalidrawView, nodeId: string) {
+    new ThemeModal(this.app, layoutOf(view, nodeId)?.theme ?? null, (t) => setTheme(view, nodeId, t)).open();
+  }
+
   /** Adds a summary spanning the selected topics, or the topic being edited. */
   private summarize(view: ExcalidrawView) {
     if (editingNode(view)) return this.runOnNode(view, (id) => addSummary(view, [id]));
@@ -439,17 +480,21 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     void addRelationship(view, ends[0], ends[1]);
   }
 
-  /** Edits the selected node's text, or the selected boundary's title. */
+  /** Edits the selected node's text, the selected boundary's title or the selected callout's text. */
   private edit(view: ExcalidrawView) {
     const boundary = selectedBoundary(view);
     if (boundary) return editBoundaryTitle(view, boundary);
+    const callout = selectedCallout(view);
+    if (callout) return editCallout(view, callout);
     this.runOnNode(view, (id) => editNode(view, id));
   }
 
-  /** Deletes the selected node with its subtopics, or the selected boundary. */
+  /** Deletes the selected node with its subtopics, or the selected boundary or callout. */
   private remove(view: ExcalidrawView) {
     const boundary = selectedBoundary(view);
     if (boundary) return deleteBoundary(view, boundary);
+    const callout = selectedCallout(view);
+    if (callout) return deleteCallout(view, callout);
     this.runOnNode(view, (id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic));
   }
 
@@ -533,6 +578,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       addSummary: () => this.summarize(view),
       addBoundary: () => this.bound(view),
       addRelationship: () => this.relate(view),
+      addCallout: on((id) => addCallout(view, id)),
       edit: () => void this.edit(view),
       remove: () => void this.remove(view),
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
@@ -544,6 +590,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       reset: () => resetLayout(view, selectedNode(view)?.id),
       resetAll: () => resetAll(view, selectedNode(view)?.id),
       setStructure: (st) => this.runOnMap(view, (id) => setStructure(view, id, st)),
+      setTheme: (t) => this.runOnMap(view, (id) => setTheme(view, id, t)),
       toggleAutoAlign: () => this.runOnMap(view, (id) => toggleAutoAlign(view, id)),
       togglePause: () => this.togglePause(),
     };
@@ -618,8 +665,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     } else if (appState.editingTextElement) {
       // Excalidraw's [[link]] suggester is open: its Enter and Tab pick a link.
       if (e.defaultPrevented || target.ownerDocument.body.querySelector(":scope > .suggestion-container")) return;
-      if (editingTitle(view)) {
-        // Enter commits a boundary title.
+      if (editingTitle(view) || editingCallout(view)) {
+        // Enter commits a boundary title or a callout; Shift+Enter starts a new line.
         if (e.key !== "Enter" || e.shiftKey) return;
         e.preventDefault();
         e.stopPropagation();
@@ -639,6 +686,17 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
         // A selected boundary: Delete removes it, Space or Enter edits its title.
         if (e.key === "Delete" || e.key === "Backspace") void deleteBoundary(view, boundary);
         else if ((e.key === " " || e.key === "Enter") && !e.repeat) void editBoundaryTitle(view, boundary);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+      const callout = selectedCallout(view);
+      if (callout) {
+        // A selected callout too: Delete removes it, Space or Enter edits its text.
+        if (e.key === "Delete" || e.key === "Backspace") void deleteCallout(view, callout);
+        else if ((e.key === " " || e.key === "Enter") && !e.repeat) void editCallout(view, callout);
         else return;
         e.preventDefault();
         e.stopPropagation();
@@ -704,12 +762,83 @@ class StructureModal extends FuzzySuggestModal<Structure> {
   }
 }
 
+class ThemeModal extends FuzzySuggestModal<{ id: Theme; name: string }> {
+  constructor(app: App, private current: Theme | null, private choose: (t: Theme) => void) {
+    super(app);
+    this.setPlaceholder("Theme of the mind map");
+  }
+
+  getItems(): { id: Theme; name: string }[] {
+    return themeOptions();
+  }
+
+  getItemText(t: { id: Theme; name: string }): string {
+    return t.id === this.current ? `${t.name} (current)` : t.name;
+  }
+
+  onChooseItem(t: { id: Theme; name: string }) {
+    this.choose(t.id);
+  }
+}
+
+/** Asks before doing something that can't be undone. */
+class ConfirmModal extends Modal {
+  constructor(app: App, private heading: string, private text: string, private confirm: string, private onConfirm: () => void) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle(this.heading);
+    this.contentEl.createEl("p", { text: this.text });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) => b.setButtonText(this.confirm).setDestructive().setCta().onClick(() => {
+        this.close();
+        this.onConfirm();
+      }));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+/** Asks for a new name for a theme. */
+
+class RenameModal extends Modal {
+  constructor(app: App, private name: string, private rename: (name: string) => void) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle("Rename theme");
+    let value = this.name;
+    const submit = () => {
+      if (!value.trim()) return;
+      this.rename(value.trim());
+      this.close();
+    };
+    new Setting(this.contentEl).setName("Name").addText((t) => {
+      t.setValue(value).onChange((v) => (value = v));
+      t.inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submit();
+      });
+      window.setTimeout(() => t.inputEl.select(), 0);
+    });
+    new Setting(this.contentEl).addButton((b) => b.setButtonText("Rename").setCta().onClick(submit));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 class MindMapSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ExcalidrawMindMapPlugin) {
     super(app, plugin);
   }
 
-  // Control keys are paths into the settings, such as "colors.central.text".
+  // Control keys are paths into the settings, such as "themes.0.colors.central.text".
   getControlValue(key: string): unknown {
     return key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], this.plugin.settings);
   }
@@ -723,7 +852,6 @@ class MindMapSettingTab extends PluginSettingTab {
   }
 
   getSettingDefinitions(): SettingDefinitionItem[] {
-    const color = (name: string, key: string): SettingDefinition => ({ name, control: { type: "color", key } });
     return [
       {
         name: "Show control panel on desktop",
@@ -734,6 +862,11 @@ class MindMapSettingTab extends PluginSettingTab {
         name: "Control panel position",
         desc: "A row at the bottom or top of the drawing, or a column on its left or right side. On phones, where Excalidraw's own toolbars take the bottom, Bottom shows it at the top.",
         control: { type: "dropdown", key: "panelPosition", options: PANEL_POSITIONS },
+      },
+      {
+        name: "Control panel style",
+        desc: "How the panel looks: like Obsidian's own toolbars, in the accent color, standing out from the theme, see-through over the drawing, or with colored icons.",
+        control: { type: "dropdown", key: "panelStyle", options: PANEL_STYLES },
       },
       {
         name: "Allow deleting the central topic",
@@ -751,62 +884,211 @@ class MindMapSettingTab extends PluginSettingTab {
         control: { type: "toggle", key: "autoAlign" },
       },
       {
+        name: "Theme of new maps",
+        desc: "The colors of a map: a built-in theme or one of your own. Each map keeps its own, changed from the panel's theme menu or the command palette.",
+        control: { type: "dropdown", key: "theme", options: Object.fromEntries(themeOptions().map((t) => [t.id, t.name])) },
+      },
+      {
         name: "Arrows instead of lines",
         desc: "Connectors point to the subtopic with an arrowhead. Used for connectors created from now on, and when you reset all.",
         control: { type: "toggle", key: "arrows" },
       },
       {
         type: "page",
-        name: "Colors",
-        desc: "Used for topics created from now on. Existing topics keep their colors until you reset all from the panel's layout menu.",
-        items: [
-          {
-            type: "group",
-            heading: "Central topic",
-            items: [color("Text", "colors.central.text"), color("Border", "colors.central.border"), color("Background", "colors.central.fill")],
-          },
-          {
-            type: "group",
-            heading: "Topics",
-            items: [{ ...color("Text", "colors.topicText"), desc: "Text of main topics and subtopics." }],
-          },
-          {
-            type: "group",
-            heading: "Summary",
-            items: [color("Text", "colors.summary.text"), color("Border and brace", "colors.summary.border"), color("Background", "colors.summary.fill")],
-          },
-          {
-            type: "group",
-            heading: "Boundary",
-            items: [
-              color("Line", "colors.boundary.line"),
-              color("Background", "colors.boundary.fill"),
-              color("Title text", "colors.boundary.title"),
-              color("Title background", "colors.boundary.titleFill"),
-            ],
-          },
-          {
-            type: "group",
-            heading: "Relationship",
-            items: [color("Line and arrowhead", "colors.relationship.line"), color("Label text", "colors.relationship.text")],
-          },
-          this.branchList(),
-          {
-            name: "Reset colors to defaults",
-            desc: "Restores the default colors, branch colors included.",
-            action: () => {
-              this.plugin.settings.colors = structuredClone(DEFAULT_COLORS);
-              void this.saveAndUpdate();
-            },
-          },
-        ],
+        name: "Themes",
+        desc: "Your own themes, which the panel's theme menu offers after the built-in ones. Add, edit, import and export them.",
+        displayValue: () => String(this.plugin.settings.themes.length),
+        items: [this.themeList(), this.themeTransfer()],
       },
     ];
   }
 
+  /** The user's themes, each a page of its colors. */
+  private themeList(): SettingDefinitionItem {
+    const themes = this.plugin.settings.themes;
+    return {
+      type: "list",
+      heading: "Your themes",
+      emptyState: "No themes of your own. Add one, starting from any theme, or import one.",
+      items: themes.map((t, i) => this.themePage(t, i)),
+      onReorder: (from, to) => {
+        themes.splice(to, 0, ...themes.splice(from, 1));
+        void this.saveAndUpdate();
+      },
+      addItem: { name: "Add theme", action: (el) => this.chooseStart(el) },
+    };
+  }
+
+  /** Lets the user pick the theme a new one starts as a copy of. */
+  private chooseStart(el: HTMLElement) {
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle("Start from").setIsLabel(true));
+    const options = themeOptions();
+    for (const t of options) {
+      if (t.user && !options[options.indexOf(t) - 1].user) menu.addSeparator();
+      menu.addItem((i) => i.setTitle(themeTitle(t.id)).onClick(() => this.addThemes([{ name: `${t.name} copy`, colors: structuredClone(colorsOf(t.id)) }])));
+    }
+    const r = el.getBoundingClientRect();
+    menu.showAtPosition({ x: r.left, y: r.bottom }, el.doc);
+  }
+
+  /** Adds themes with new ids, renamed when another theme has their name. */
+  private addThemes(added: { name: string; colors: Colors }[]) {
+    const themes = this.plugin.settings.themes;
+    for (const t of added)
+      themes.push({ id: newThemeId(themes.map((x) => x.id)), name: uniqueName(t.name, themes.map((x) => x.name)), colors: t.colors });
+    void this.saveAndUpdate();
+  }
+
+  /** Deletes the theme after asking, and leaves its page. */
+  private deleteTheme(t: UserTheme) {
+    new ConfirmModal(this.app, `Delete theme ${t.name}?`, "Maps with this theme keep their colors; topics added to them get the Classic colors.", "Delete", () => {
+      const settings = this.plugin.settings;
+      settings.themes = settings.themes.filter((x) => x !== t);
+      settings.theme = validTheme(settings.theme, settings.themes);
+      void this.plugin.saveSettings().then(() => {
+        // Obsidian has no public way back from a page; without it, the emptied page stays until the user goes back.
+        (this as unknown as { setting?: { closePage?: () => void } }).setting?.closePage?.();
+        this.update();
+      });
+    }).open();
+  }
+
+  /** A theme's page: renaming and deleting it, then its colors. */
+  private themePage(t: UserTheme, i: number): SettingDefinitionPage {
+    const color = (name: string, key: string): SettingDefinition => ({ name, control: { type: "color", key: `themes.${i}.colors.${key}` } });
+    const page: SettingDefinitionPage & { id: string } = {
+      type: "page",
+      id: t.id, // Obsidian finds the open page by its id, the name by default, so renaming the theme keeps the page open
+      name: t.name,
+      desc: t.id === this.plugin.settings.theme ? "New maps get this theme." : undefined,
+      items: [
+        {
+          type: "group",
+          items: [
+            {
+              name: "Rename",
+              desc: `Called ${t.name}.`,
+              action: () => new RenameModal(this.app, t.name, (name) => {
+                t.name = name;
+                void this.saveAndUpdate();
+              }).open(),
+            },
+            { name: "Delete theme", desc: "Maps with this theme keep their colors.", action: () => this.deleteTheme(t) },
+          ],
+        },
+        {
+          type: "group",
+          heading: "Central topic",
+          items: [color("Text", "central.text"), color("Border", "central.border"), color("Background", "central.fill")],
+        },
+        {
+          type: "group",
+          heading: "Topics",
+          items: [{ ...color("Text", "topicText"), desc: "Text of main topics and subtopics." }],
+        },
+        {
+          type: "group",
+          heading: "Summary",
+          items: [color("Text", "summary.text"), color("Border and brace", "summary.border"), color("Background", "summary.fill")],
+        },
+        {
+          type: "group",
+          heading: "Boundary",
+          items: [color("Line", "boundary.line"), color("Background", "boundary.fill"), color("Title text", "boundary.title"), color("Title background", "boundary.titleFill")],
+        },
+        {
+          type: "group",
+          heading: "Relationship",
+          items: [color("Line and arrowhead", "relationship.line"), color("Label text", "relationship.text")],
+        },
+        {
+          type: "group",
+          heading: "Callout",
+          items: [color("Text", "callout.text"), color("Border and tail", "callout.border"), color("Background", "callout.fill")],
+        },
+        this.branchList(t.colors),
+        {
+          name: "Reset colors to defaults",
+          desc: "Restores the default colors, branch colors included.",
+          action: () => {
+            t.colors = structuredClone(DEFAULT_COLORS);
+            void this.saveAndUpdate();
+          },
+        },
+      ],
+    };
+    return page;
+  }
+
+  /** Importing themes from the clipboard or a file, and exporting all of them. */
+  private themeTransfer(): SettingDefinitionItem {
+    const themes = this.plugin.settings.themes;
+    return {
+      type: "group",
+      heading: "Import and export",
+      items: [
+        { name: "Import from the clipboard", desc: "Themes copied as JSON from another vault, or shared with you.", action: () => void this.importFromClipboard() },
+        { name: "Import from a file", desc: "A JSON file of themes saved from another vault, or shared with you.", action: () => this.importFromFile() },
+        { name: "Export to the clipboard", desc: "All your themes as JSON.", disabled: () => !themes.length, action: () => void this.copyThemes(themes) },
+        { name: "Export as a file in the vault", desc: "All your themes as a JSON file at the root of the vault.", disabled: () => !themes.length, action: () => void this.saveThemes(themes, "Mind map themes") },
+      ],
+    };
+  }
+
+  private async copyThemes(themes: UserTheme[]) {
+    try {
+      await navigator.clipboard.writeText(themesToJson(themes));
+    } catch {
+      return void new Notice("Can't write to the clipboard.");
+    }
+    new Notice(`${themes.length} ${themes.length === 1 ? "theme" : "themes"} copied to the clipboard.`);
+  }
+
+  /** Saves the themes as a JSON file at the root of the vault, numbered when the name is taken. */
+  private async saveThemes(themes: UserTheme[], name: string) {
+    const vault = this.app.vault;
+    const base = name.replace(/[\\/:*?"<>|#^[\]]/g, "-").trim() || "Mind map themes";
+    let path = normalizePath(`${base}.json`);
+    for (let i = 2; vault.getAbstractFileByPath(path); i++) path = normalizePath(`${base} ${i}.json`);
+    try {
+      await vault.create(path, themesToJson(themes));
+    } catch {
+      return void new Notice(`Can't save ${path}.`);
+    }
+    new Notice(`Saved to ${path}.`);
+  }
+
+  private importThemes(text: string) {
+    const found = parseThemes(text);
+    if (!found) return void new Notice("No themes to import.");
+    this.addThemes(found);
+    new Notice(found.length === 1 ? `Theme ${found[0].name} imported.` : `${found.length} themes imported.`);
+  }
+
+  private async importFromClipboard() {
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      return void new Notice("Can't read the clipboard.");
+    }
+    this.importThemes(text);
+  }
+
+  private importFromFile() {
+    const input = createEl("input", { attr: { type: "file", accept: ".json,application/json" } });
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (file) void file.text().then((text) => this.importThemes(text));
+    });
+    input.click();
+  }
+
   /** Branch colors that main topics take in turn: line and border, then main topic background. */
-  private branchList(): SettingDefinitionItem {
-    const branches = this.plugin.settings.colors.branches;
+  private branchList(colors: Colors): SettingDefinitionItem {
+    const branches = colors.branches;
+
     return {
       type: "list",
       heading: "Branches",

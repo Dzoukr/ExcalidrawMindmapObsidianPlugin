@@ -12,6 +12,7 @@ export interface LNode {
   summaries?: LSummary[];
   boundaries?: LBoundary[];
   folded?: boolean; // children, summaries and boundaries are hidden and left out of the layout
+  callout?: string; // id of the callout right above the node, which the size function measures
 }
 
 /** Summary topic attached to a range of the parent's children, drawn beyond a brace spanning their subtrees. */
@@ -33,6 +34,7 @@ export interface Layout {
   boxes: Map<string, Box>;
   braces: Map<string, Brace>; // summary id -> brace
   boundaries: Map<string, { frame: Box; title: Box }>; // boundary id -> frame and the title tab on its top edge
+  callouts: Map<string, Box>; // node id -> the bubble of its callout
 }
 
 /** Position info read from the scene, used to detect manual moves since the last layout. */
@@ -56,6 +58,9 @@ export const BOUNDARY_PAD = 10; // enclosed subtrees to boundary frame
 export const TITLE_INSET = 14; // frame's left edge to its title tab
 export const TITLE_OVERLAP = 2; // title tab reaching down over the frame's top edge
 export const MOVE_EPSILON = 0.5; // less than this from where the layout put it is not a manual move
+export const CALLOUT_GAP = 16; // callout bubble to its topic, which its tail spans
+export const TAIL_HALF = 7; // half the width of a callout's tail where it leaves the bubble
+export const TAIL_INSET = 6; // tail reaching up behind the bubble, so it seems to grow out of it
 
 const vGap = (depth: number) => (depth <= 1 ? V_GAP_L1 : V_GAP);
 
@@ -99,10 +104,11 @@ function segments(kids: LNode[], summaries: LSummary[] | undefined): Segment[] {
 
 /** The tree as shown: a folded node keeps none of its children, summaries and boundaries. */
 function shown(n: LNode): LNode {
-  if (n.folded) return { id: n.id, side: n.side, children: [] };
+  if (n.folded) return { id: n.id, side: n.side, children: [], callout: n.callout };
   return {
     id: n.id,
     side: n.side,
+    callout: n.callout,
     children: n.children.map(shown),
     summaries: n.summaries?.map((s) => ({ node: shown(s.node), covers: s.covers })),
     boundaries: n.boundaries,
@@ -141,7 +147,8 @@ export function updateOffsets(tree: LNode, info: (id: string) => PlacedInfo): Ma
  * each subtree stacked vertically and centered on its parent. Offsets shift a node and its subtree.
  * A summary sits beyond the summarized subtrees, centered on them, and its range gets extra room
  * when the summary's own subtree is taller. A boundary frames its subtrees, with room kept above
- * for its title. Summaries and boundaries take in the ones within their range.
+ * for its title. Summaries and boundaries take in the ones within their range. A callout sits right
+ * above its topic, centered on it, with room kept for it among the siblings.
  * Nodes hidden by a folded ancestor get no box.
  */
 export function computeLayout(
@@ -152,6 +159,7 @@ export function computeLayout(
 ): Layout {
   const root = shown(tree);
   const subtreeHeight = new Map<string, number>();
+  const above = new Map<string, number>(); // top of the subtree to the middle of its topic
 
   // Extra room above the first and below the last child a boundary encloses.
   type Margins = { top: (id: string) => number; bottom: (id: string) => number };
@@ -179,9 +187,14 @@ export function computeLayout(
     for (const c of n.children) measure(c, depth + 1);
     for (const s of n.summaries ?? []) measure(s.node, depth + 1);
     const own = size(n.id).h;
+    const lift = n.callout ? size(n.callout).h + CALLOUT_GAP : 0;
     const kids = n.children;
-    const h = kids.length ? Math.max(own, stackHeight(segments(kids, n.summaries), margins(n, kids), depth + 1)) : own;
+    const stack = kids.length ? stackHeight(segments(kids, n.summaries), margins(n, kids), depth + 1) : 0;
+    // The subtree is centered on the topic, but a callout only takes room above it.
+    const up = Math.max(stack / 2, own / 2 + lift);
+    const h = up + Math.max(stack / 2, own / 2);
     subtreeHeight.set(n.id, h);
+    above.set(n.id, up);
     return h;
   };
   for (const c of root.children) measure(c, 1);
@@ -190,13 +203,19 @@ export function computeLayout(
   const boxes = new Map<string, Box>();
   const braces = new Map<string, Brace>();
   const boundaries = new Map<string, { frame: Box; title: Box }>();
+  const callouts = new Map<string, Box>();
   const decorations = new Map<string, Box[]>(); // summary or boundary id -> everything it draws
+  const placeCallout = (n: LNode, box: Box) => {
+    if (n.callout) callouts.set(n.id, calloutBox(box, size(n.callout)));
+  };
   const rs = size(root.id);
   const rootBox = { x: rootCenter.x - rs.w / 2, y: rootCenter.y - rs.h / 2, w: rs.w, h: rs.h };
   boxes.set(root.id, rootBox);
+  placeCallout(root, rootBox);
 
   const subtreeBoxes = (n: LNode): Box[] => [
     boxes.get(n.id)!,
+    ...(callouts.has(n.id) ? [callouts.get(n.id)!] : []),
     ...n.children.flatMap(subtreeBoxes),
     ...(n.summaries ?? []).flatMap((s) => decorations.get(s.node.id) ?? []),
     ...(n.boundaries ?? []).flatMap((b) => decorations.get(b.id) ?? []),
@@ -219,6 +238,7 @@ export function computeLayout(
     const x = side === "R" ? brace.x + brace.w + SUMMARY_GAP : brace.x - SUMMARY_GAP - sz.w;
     const box = { x: x + o.x, y: c.y + c.h / 2 - sz.h / 2 + o.y, w: sz.w, h: sz.h };
     boxes.set(s.node.id, box);
+    placeCallout(s.node, box);
     place(box, s.node, s.node.children, side, depth + 1);
     decorations.set(s.node.id, [brace, ...subtreeBoxes(s.node)]);
   };
@@ -248,8 +268,9 @@ export function computeLayout(
         const sh = subtreeHeight.get(k.id)!;
         const o = offset(k.id);
         const x = side === "R" ? parent.x + parent.w + hGap : parent.x - hGap - s.w;
-        const box = { x: x + o.x, y: t + sh / 2 - s.h / 2 + o.y, w: s.w, h: s.h };
+        const box = { x: x + o.x, y: t + above.get(k.id)! - s.h / 2 + o.y, w: s.w, h: s.h };
         boxes.set(k.id, box);
+        placeCallout(k, box);
         place(box, k, k.children, side, depth + 1);
         t += sh + m.bottom(k.id) + gap;
       }
@@ -277,7 +298,25 @@ export function computeLayout(
   };
   place(rootBox, root, root.children.filter((c) => c.side !== "L"), "R", 1);
   place(rootBox, root, root.children.filter((c) => c.side === "L"), "L", 1);
-  return { boxes, braces, boundaries };
+  return { boxes, braces, boundaries, callouts };
+}
+
+/** The bubble of a callout of the given size, right above its topic and centered on it. */
+export function calloutBox(topic: Box, s: Size): Box {
+  return { x: topic.x + topic.w / 2 - s.w / 2, y: topic.y - CALLOUT_GAP - s.h, w: s.w, h: s.h };
+}
+
+/**
+ * Tail of a callout: a closed triangle from behind the bubble's bottom edge, where the bubble covers it,
+ * down to the middle of its topic's top edge. Its position and points relative to it.
+ */
+export function tailPoints(bubble: Box, topic: Box): { x: number; y: number; points: number[][] } {
+  const half = Math.min(TAIL_HALF, bubble.w / 4);
+  const tip = { x: topic.x + topic.w / 2, y: topic.y - 2 };
+  const cx = Math.min(Math.max(tip.x, bubble.x + half), bubble.x + bubble.w - half);
+  const x = cx - half;
+  const y = bubble.y + bubble.h - TAIL_INSET;
+  return { x, y, points: [[0, 0], [2 * half, 0], [tip.x - x, tip.y - y], [0, 0]] };
 }
 
 /** Points of a brace polyline relative to its box, meant to be drawn as a smoothed line. */

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LNode, PlacedInfo } from "../src/layout.ts";
-import { BOUNDARY_PAD, BRACE_GAP, BRACE_W, RELATION_GAP, ROOT_H_GAP, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, computeLayout, dropsOnto, findFreeSpot, relationBend, relationPoints, updateOffsets } from "../src/layout.ts";
+import {
+  BOUNDARY_PAD, BRACE_GAP, BRACE_W, CALLOUT_GAP, RELATION_GAP, ROOT_H_GAP, TAIL_INSET, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, V_GAP_L1, computeLayout, dropsOnto,
+  findFreeSpot, relationBend, relationPoints, tailPoints, updateOffsets,
+} from "../src/layout.ts";
 
 const node = (id: string, side: "R" | "L" | null, children: LNode[] = []): LNode => ({ id, side, children });
 const size = () => ({ w: 100, h: 40 });
@@ -179,4 +182,50 @@ test("a topic dropped on the middle half of a box lands on it, nearer its edges 
   assert.equal(dropsOnto({ x: 50, y: 31 }, b), false);
   assert.equal(dropsOnto({ x: -1, y: 20 }, b), false);
   assert.equal(dropsOnto({ x: 101, y: 20 }, b), false);
+});
+
+test("a callout sits right above its topic, centered, and pushes the sibling above apart", () => {
+  const a = node("a", "R");
+  a.callout = "c";
+  const root = node("r", null, [a, node("b", "R")]);
+  const sizes = (id: string) => (id === "c" ? { w: 60, h: 20 } : { w: 100, h: 40 });
+  const { boxes: b, callouts } = computeLayout(root, sizes, zero, { x: 0, y: 0 });
+  const box = b.get("a")!;
+  const c = callouts.get("a")!;
+  assert.equal(c.y + c.h + CALLOUT_GAP, box.y);
+  assert.equal(c.x + c.w / 2, box.x + box.w / 2);
+  // The siblings stay apart by the usual gap below the topic; the callout takes room only above it.
+  assert.equal(b.get("b")!.y - (box.y + box.h), V_GAP_L1);
+  // Together they are centered on the central topic.
+  assert.equal((c.y + b.get("b")!.y + b.get("b")!.h) / 2, 0);
+});
+
+test("a topic with a callout stays centered on its subtopics when they are taller", () => {
+  const a = node("a", "R", [node("a1", "R"), node("a2", "R"), node("a3", "R")]);
+  a.callout = "c";
+  const sizes = (id: string) => (id === "c" ? { w: 60, h: 10 } : { w: 100, h: 40 });
+  const { boxes: b, callouts } = computeLayout(node("r", null, [a]), sizes, zero, { x: 0, y: 0 });
+  const box = b.get("a")!;
+  assert.equal(box.y + box.h / 2, (b.get("a1")!.y + b.get("a3")!.y + b.get("a3")!.h) / 2);
+  assert.equal(callouts.get("a")!.y, box.y - CALLOUT_GAP - 10);
+});
+
+test("a callout of a hidden topic gets no box, one of a folded topic keeps it", () => {
+  const a1 = node("a1", "R");
+  a1.callout = "c1";
+  const a = node("a", "R", [a1]);
+  a.callout = "c";
+  a.folded = true;
+  const { callouts } = computeLayout(node("r", null, [a]), size, zero, { x: 0, y: 0 });
+  assert.deepEqual([...callouts.keys()], ["a"]);
+});
+
+test("a callout's tail grows from behind its bubble down to the middle of its topic", () => {
+  const bubble = { x: 20, y: -60, w: 60, h: 30 };
+  const topic = { x: 0, y: 0, w: 100, h: 40 };
+  const t = tailPoints(bubble, topic);
+  assert.equal(t.y, bubble.y + bubble.h - TAIL_INSET);
+  const [first, , tip, last] = t.points;
+  assert.deepEqual(first, last); // closed, so it is filled
+  assert.deepEqual({ x: t.x + tip[0], y: t.y + tip[1] }, { x: 50, y: -2 });
 });

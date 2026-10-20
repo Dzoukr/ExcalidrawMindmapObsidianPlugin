@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { El } from "../src/excalidraw.ts";
-import { KEY, balancedSplit, boundaryData, buildMap, isHidden, nodeData, orderLine, rangesIn, structureOf, titleData } from "../src/model.ts";
+import { KEY, balancedSplit, boundaryData, buildMap, calloutData, isHidden, nodeData, orderLine, rangesIn, rootIdOf, structureOf, titleData } from "../src/model.ts";
 
 const el = (id: string, data: object, extra: Partial<El> = {}): El =>
   ({ id, type: "rectangle", x: 0, y: 0, width: 10, height: 10, customData: { [KEY]: data }, ...extra });
@@ -132,4 +132,41 @@ test("a balanced map keeps a boundary of main topics on one side", () => {
   assert.deepEqual(R, ["a0", "a1", "a2"]);
   assert.deepEqual(L, ["a3"]);
   assert.deepEqual(map.boundaries.get("f")!.covers, ["a1", "a2"]);
+});
+
+test("a callout belongs to its topic, with its tail; it is no topic itself", () => {
+  const els = [
+    el("r", { self: "r", root: "r", parent: null, order: 0 }),
+    el("a", { self: "a", root: "r", parent: "r", order: 0, side: "R" }),
+    el("c", { callout: true, self: "c", root: "r", node: "a" }, { boundElements: [{ id: "ct", type: "text" }] }),
+    { id: "ct", type: "text", x: 0, y: 0, width: 5, height: 5, containerId: "c", text: "Note" } as El,
+    el("t", { calloutTail: true, root: "r", callout: "c" }, { type: "line" }),
+  ];
+  assert.equal(nodeData(els[2]), null);
+  assert.equal(calloutData(els[2])?.node, "a");
+  assert.equal(rootIdOf(els[2]), "r");
+  assert.equal(rootIdOf(els[4]), "r");
+  const map = buildMap(els, "r")!;
+  assert.equal(map.nodes.size, 2);
+  const c = map.callouts.get("a")!;
+  assert.equal(c.text?.id, "ct");
+  assert.equal(c.tail?.id, "t");
+  assert.equal(map.nodes.get("a")!.callout, "c");
+  assert.deepEqual(map.strayCallouts, []);
+});
+
+test("a callout without its topic, a second one, one on a summary and a tail without a bubble are stray", () => {
+  const els = [
+    el("r", { self: "r", root: "r", parent: null, order: 0 }),
+    el("a", { self: "a", root: "r", parent: "r", order: 0, side: "R" }),
+    el("s", { self: "s", root: "r", parent: "r", order: 0, side: "R", summary: ["a"] }),
+    el("c1", { callout: true, self: "c1", root: "r", node: "a" }),
+    el("c2", { callout: true, self: "c2", root: "r", node: "a" }),
+    el("c3", { callout: true, self: "c3", root: "r", node: "gone" }),
+    el("c4", { callout: true, self: "c4", root: "r", node: "s" }),
+    el("t", { calloutTail: true, root: "r", callout: "c3" }, { type: "line" }),
+  ];
+  const map = buildMap(els, "r")!;
+  assert.deepEqual([...map.callouts.keys()], ["a"]);
+  assert.deepEqual(map.strayCallouts.map((e) => e.id).sort(), ["c2", "c3", "c4", "t"]);
 });

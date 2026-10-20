@@ -1,18 +1,19 @@
 import { Notice } from "obsidian";
 import { Binding, El, ExcalidrawAutomate, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import {
-  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, computeLayout, dropsOnto, edgePoints, findFreeSpot, relationBend, relationPoints, updateOffsets,
+  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, calloutBox, computeLayout, dropsOnto, edgePoints, findFreeSpot, relationBend, relationPoints,
+  tailPoints, updateOffsets,
 } from "./layout";
 import {
-  HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMNode, MMSummary, MindMap, NodeData, RelationData, Structure, badgeData, balancedSplit, byOrder, boundTextId, boundaryData, braceData,
-  buildMap, edgeData, hiddenState, isHidden, isRelationLabel, nodeData, orderLine, rangesIn, relationData, resolveNodeElement, rootIdOf, structureIn,
-  structureOf, subtree, titleData, twoSided,
+  HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMCallout, MMNode, MMSummary, MindMap, NodeData, RelationData, Structure, badgeData, balancedSplit, byOrder,
+  boundTextId, boundaryData, braceData, buildMap, calloutData, edgeData, hiddenState, isHidden, isRelationLabel, nodeData, orderLine, rangesIn, relationData,
+  resolveNodeElement, rootIdOf, structureIn, structureOf, subtree, tailData, titleData, twoSided,
 } from "./model";
 import { OutlineItem, parseOutline, toMarkdown } from "./outline";
 import {
-  BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, DEFAULT_TEXT, MIN_TEXT_WIDTH, NodeStyle, SUMMARY_PADDING,
-  SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, boundaryColors, branchColor, connectorArrowhead, paddingFor, relationshipColors,
-  newMapDefaults, styleFor, summaryStyle,
+  BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, CALLOUT_FONT_SIZE, CALLOUT_PADDING, CALLOUT_TEXT, Colors, DEFAULT_TEXT, MIN_TEXT_WIDTH,
+  NodeStyle, SUMMARY_PADDING, SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, Theme, branchColor, colorsOf, connectorArrowhead, newMapDefaults, paddingFor,
+  styleFor, summaryStyle, themeIn,
 } from "./styles";
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -67,7 +68,7 @@ export function selectedTopics(view: ExcalidrawView): El[] {
     let el = byId.get(id);
     if (el?.type === "text" && el.containerId) el = byId.get(el.containerId);
     if (nodeData(el)) nodes.set(el!.id, el!);
-    else if (!edgeData(el) && !braceData(el) && !badgeData(el) && !boundaryData(el) && !titleData(el) && !relationData(el)) return [];
+    else if (!edgeData(el) && !braceData(el) && !badgeData(el) && !boundaryData(el) && !titleData(el) && !relationData(el) && !calloutData(el) && !tailData(el)) return [];
   }
   return [...nodes.values()];
 }
@@ -115,6 +116,23 @@ export function selectedBoundary(view: ExcalidrawView): string | null {
   return found.size === 1 ? [...found][0] : null;
 }
 
+/** The callout whose bubble (alone, maybe with its text or tail) is selected, if any. */
+export function selectedCallout(view: ExcalidrawView): string | null {
+  const api = view.excalidrawAPI;
+  if (!api) return null;
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const byId = new Map(api.getSceneElements().map((e) => [e.id, e]));
+  const found = new Set<string>();
+  for (const id of Object.keys(sel).filter((k) => sel[k])) {
+    let el = byId.get(id);
+    if (el?.type === "text" && el.containerId) el = byId.get(el.containerId);
+    const c = calloutData(el) ? el!.id : tailData(el)?.callout;
+    if (!c) return null;
+    found.add(c);
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
 /** The topic whose fold badge (alone) is selected, if any. */
 export function selectedBadge(view: ExcalidrawView): string | null {
   const api = view.excalidrawAPI;
@@ -141,6 +159,13 @@ export function editingTitle(view: ExcalidrawView): boolean {
   return !!cid && !!titleData(api.getSceneElements().find((e) => e.id === cid));
 }
 
+/** Whether the text of a callout is being edited. */
+export function editingCallout(view: ExcalidrawView): boolean {
+  const api = view.excalidrawAPI;
+  const cid = api?.getAppState().editingTextElement?.containerId;
+  return !!cid && !!calloutData(api.getSceneElements().find((e) => e.id === cid));
+}
+
 /** The mind map node whose text is being edited, if any. */
 export function editingNode(view: ExcalidrawView): El | null {
   const api = view.excalidrawAPI;
@@ -151,9 +176,16 @@ export function editingNode(view: ExcalidrawView): El | null {
 }
 
 function select(view: ExcalidrawView, id: string) {
-  const ea = getEA(view);
-  ea?.selectElementsInView([id]);
-  ea?.destroy?.();
+  const api = view.excalidrawAPI!;
+  const group = api.getSceneElements().find((e) => e.id === id)?.groupIds?.[0];
+  if (group) {
+    // Inside its group, as if double-clicked into it, so the element is selected alone and Enter edits its text.
+    api.updateScene({ appState: { selectedElementIds: { [id]: true }, selectedGroupIds: {}, editingGroupId: group }, captureUpdate: "NEVER" });
+  } else {
+    const ea = getEA(view);
+    ea?.selectElementsInView([id]);
+    ea?.destroy?.();
+  }
   ensureVisible(view, id);
 }
 
@@ -210,6 +242,7 @@ async function focusNode(view: ExcalidrawView, id: string, edit: boolean) {
 interface NewNode {
   depth: number;
   branch: Branch;
+  colors: Colors; // of the map's theme
   style?: NodeStyle; // instead of the depth and branch style
   text?: string;
   data: Omit<NodeData, "self">;
@@ -219,7 +252,7 @@ interface NewNode {
 }
 
 function createNode(tx: SceneTx, ea: ExcalidrawAutomate, n: NewNode): string {
-  const st = n.style ?? styleFor(n.depth, n.branch);
+  const st = n.style ?? styleFor(n.depth, n.branch, n.colors);
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: st.textColor,
@@ -322,8 +355,10 @@ function createBrace(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, summar
 }
 
 /** Title tab of a boundary: a container with bound text, not yet added to the scene. */
-function createTitle(ea: ExcalidrawAutomate, rootId: string, boundaryId: string, at: Vec, roughness: number, fontFamily: number): El[] {
-  const c = boundaryColors();
+function createTitle(
+  ea: ExcalidrawAutomate, rootId: string, boundaryId: string, at: Vec, roughness: number, fontFamily: number, colors: Colors, groupIds: string[],
+): El[] {
+  const c = colors.boundary;
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: c.title,
@@ -349,15 +384,19 @@ function createTitle(ea: ExcalidrawAutomate, rootId: string, boundaryId: string,
   });
   const els = ea.getElements();
   for (const el of els) if (el.id === id) el.customData = { [KEY]: { boundaryTitle: true, self: id, root: rootId, boundary: boundaryId } };
+  for (const el of els) el.groupIds = [...groupIds];
   // Container before its text.
   els.sort((a, b) => (a.type === "text" ? 1 : 0) - (b.type === "text" ? 1 : 0));
   ea.clear();
   return els;
 }
 
-/** Boundary frame with its title around the topics, from the first one, not yet added to the scene. */
-function createBoundary(ea: ExcalidrawAutomate, rootId: string, parentId: string, topics: string[], first: MMNode): El[] {
-  const c = boundaryColors();
+/**
+ * Boundary frame with its title around the topics, from the first one, not yet added to the scene. They are grouped,
+ * so they are selected and moved together.
+ */
+function createBoundary(ea: ExcalidrawAutomate, rootId: string, parentId: string, topics: string[], first: MMNode, colors: Colors): El[] {
+  const c = colors.boundary;
   ea.clear();
   Object.assign(ea.style, {
     strokeColor: c.line,
@@ -373,9 +412,72 @@ function createBoundary(ea: ExcalidrawAutomate, rootId: string, parentId: string
   const id = ea.addRect(first.el.x, first.el.y, first.el.width, first.el.height);
   const frame = ea.getElement(id);
   frame.customData = { [KEY]: { boundary: true, self: id, root: rootId, parent: parentId, topics } };
+  frame.groupIds = [Math.random().toString(36).slice(2, 10)];
   ea.clear();
   const font = first.text?.fontFamily ?? 1;
-  return [frame, ...createTitle(ea, rootId, id, { x: first.el.x, y: first.el.y - 30 }, first.el.roughness, font)];
+  return [frame, ...createTitle(ea, rootId, id, { x: first.el.x, y: first.el.y - 30 }, first.el.roughness, font, colors, frame.groupIds)];
+}
+
+/** Callout bubble of a topic: a container with bound text in a group of their own, which its tail joins; not yet added to the scene. */
+function createCallout(ea: ExcalidrawAutomate, rootId: string, nodeId: string, topic: El, fontFamily: number, text: string, colors: Colors): El[] {
+  const c = colors.callout;
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: c.text,
+    backgroundColor: c.fill,
+    fillStyle: "solid",
+    strokeWidth: 1,
+    strokeStyle: "solid",
+    roughness: topic.roughness,
+    roundness: { type: 3 },
+    opacity: 100,
+    angle: 0,
+    fontFamily,
+    fontSize: CALLOUT_FONT_SIZE,
+    textAlign: "center",
+    verticalAlign: "middle",
+  });
+  const id = ea.addText(topic.x, topic.y - 40, text, {
+    box: true,
+    boxPadding: CALLOUT_PADDING.padX,
+    boxStrokeColor: c.border,
+    textAlign: "center",
+    textVerticalAlign: "middle",
+  });
+  const els = ea.getElements();
+  for (const el of els) if (el.id === id) el.customData = { [KEY]: { callout: true, self: id, root: rootId, node: nodeId } };
+  const group = Math.random().toString(36).slice(2, 10);
+  for (const el of els) el.groupIds = [group];
+  // Container before its text.
+  els.sort((a, b) => (a.type === "text" ? 1 : 0) - (b.type === "text" ? 1 : 0));
+  ea.clear();
+  return els;
+}
+
+/**
+ * Tail of a callout: a filled triangle the layout shapes and places, in the bubble's groups so they are selected
+ * and moved together. Not yet added to the scene; it goes behind the bubble.
+ */
+function createTail(ea: ExcalidrawAutomate, rootId: string, calloutId: string, roughness: number, colors: Colors, groupIds: string[]): El {
+  const c = colors.callout;
+  ea.clear();
+  Object.assign(ea.style, {
+    strokeColor: c.border,
+    backgroundColor: c.fill,
+    fillStyle: "solid",
+    strokeWidth: 1,
+    strokeStyle: "solid",
+    roughness,
+    roundness: null,
+    opacity: 100,
+  });
+  const id = ea.addLine([[0, 0], [2, 0], [1, 2], [0, 0]]);
+  const el = ea.getElement(id);
+  el.polygon = true; // closed, so Excalidraw fills it
+  el.customData = { [KEY]: { calloutTail: true, root: rootId, callout: calloutId } };
+  el.groupIds = [...groupIds];
+  ea.clear();
+  return el;
 }
 
 /** Fold badge of a topic: a circle with the count of hidden topics, added to the scene. */
@@ -442,11 +544,43 @@ function deleteBoundaryEls(tx: SceneTx, b: MMBoundary) {
   if (b.title) deleteWithText(tx, b.title);
 }
 
+function deleteCalloutEls(tx: SceneTx, c: MMCallout) {
+  deleteWithText(tx, c.el);
+  if (c.tail) tx.delete(c.tail.id);
+}
+
+/** The colors of the map's theme. */
+const colorsIn = (map: MindMap): Colors => colorsOf(themeIn(map.root.data));
+
+/** The colors of the theme of the map a topic, boundary or other part of a map belongs to; Custom's outside any map. */
+function colorsAt(tx: SceneTx, id: string | undefined): Colors {
+  const r = id ? rootIdOf(tx.get(id)) : null;
+  return colorsOf(themeIn(nodeData(r ? tx.get(r) : null)));
+}
+
 // ---------- layout ----------
 
 interface NodeSize { w: number; h: number; tw: number; th: number; }
 
 const padOf = (n: MMNode) => (n.data.summary ? SUMMARY_PADDING : paddingFor(n.depth));
+
+/** Whether the callout is off the place right above its topic, where the layout puts it. */
+const misplaced = (c: El, topic: El): boolean => {
+  const b = calloutBox(boxOf(topic), { w: c.width, h: c.height });
+  return isMove({ x: c.x - b.x, y: c.y - b.y });
+};
+
+/** Moves the callout's tail to run from its bubble to its topic. */
+function placeTail(tx: SceneTx, tail: El, bubble: Box, topic: Box) {
+  const t = tailPoints(bubble, topic);
+  const cur = tail.points;
+  const same = near(tail.x, t.x) && near(tail.y, t.y) && cur?.length === t.points.length &&
+    t.points.every((p, i) => near(cur[i][0], p[0]) && near(cur[i][1], p[1]));
+  if (same) return;
+  const xs = t.points.map((p) => p[0]);
+  const ys = t.points.map((p) => p[1]);
+  tx.patch(tail.id, { x: t.x, y: t.y, points: t.points, width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) });
+}
 
 function measureBox(ea: ExcalidrawAutomate, text: El | null, pad: { padX: number; padY: number }): NodeSize {
   let tw = MIN_TEXT_WIDTH;
@@ -507,19 +641,31 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
   }
   const map = m;
   const aligned = autoAligned(map.root.data);
+  const colors = colorsIn(map);
 
-  // A boundary whose title was deleted by hand gets a new one, right above its frame.
+  // A boundary whose title was deleted by hand gets a new one, right above its frame and in its groups.
   for (const b of map.boundaries.values()) {
     if (b.title) continue;
     const first = map.nodes.get(b.covers[0])!;
-    const els = createTitle(ea, rootId, b.id, { x: b.el.x, y: b.el.y - 30 }, b.el.roughness, first.text?.fontFamily ?? 1);
+    const els = createTitle(ea, rootId, b.id, { x: b.el.x, y: b.el.y - 30 }, b.el.roughness, first.text?.fontFamily ?? 1, colors, b.el.groupIds ?? []);
+
     tx.insert(els, tx.indexOf(b.id) + 1);
     [b.title, b.titleText] = els;
+  }
+  // So does a callout whose tail was, right behind its bubble.
+  for (const c of map.callouts.values()) {
+    if (c.tail) continue;
+    const tail = createTail(ea, rootId, c.el.id, c.el.roughness, colors, c.el.groupIds ?? []);
+    const i = tx.indexOf(c.el.id);
+    if (i >= 0) tx.insert([tail], i);
+    else tx.add(tail);
+    c.tail = tail;
   }
 
   const sizes = new Map<string, NodeSize>();
   for (const n of map.nodes.values()) sizes.set(n.id, measureBox(ea, n.text, padOf(n)));
   for (const b of map.boundaries.values()) sizes.set(b.id, measureBox(ea, b.titleText, TITLE_PADDING));
+  for (const c of map.callouts.values()) sizes.set(c.el.id, measureBox(ea, c.text, CALLOUT_PADDING));
 
   // Auto-aligned, no topic keeps a manual move.
   const offsets = aligned ? new Map<string, Vec>() : updateOffsets(map.root, (id) => {
@@ -542,7 +688,7 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
       offsets.set(id, { x: el.x - auto.get(id)!.x, y: el.y - auto.get(id)!.y });
     }
   }
-  const { boxes, braces, boundaries } = place();
+  const { boxes, braces, boundaries, callouts } = place();
   const sided = twoSided(structureOf(map.root));
 
   for (const n of map.nodes.values()) {
@@ -564,6 +710,13 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
     placeBox(tx, b.title!, b.titleText, title, sizes.get(id)!, TITLE_PADDING);
   }
   for (const el of map.strayBoundaries) deleteWithText(tx, el);
+
+  for (const [id, bubble] of callouts) {
+    const c = map.callouts.get(id)!;
+    placeBox(tx, c.el, c.text, bubble, sizes.get(c.el.id)!, CALLOUT_PADDING);
+    placeTail(tx, tx.get(c.tail!.id)!, bubble, boxes.get(id)!);
+  }
+  for (const el of map.strayCallouts) deleteWithText(tx, el);
 
   for (const n of map.nodes.values()) {
     if (!n.parent || n.covers || !boxes.has(n.id)) continue;
@@ -614,7 +767,8 @@ function layoutMap(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string): MindMap
   // Everything of a hidden topic turns invisible and locked, and visible again once shown.
   for (const n of map.nodes.values()) {
     const hidden = !boxes.has(n.id);
-    for (const el of [n.el, n.text, map.edges.get(n.id), map.braces.get(n.id)]) if (el) setHidden(tx, el.id, hidden);
+    const c = map.callouts.get(n.id);
+    for (const el of [n.el, n.text, map.edges.get(n.id), map.braces.get(n.id), c?.el, c?.text, c?.tail]) if (el) setHidden(tx, el.id, hidden);
     for (const b of n.boundaries) {
       const h = !boundaries.has(b.id);
       for (const el of [b.el, b.title, b.titleText]) if (el) setHidden(tx, el.id, h);
@@ -686,10 +840,11 @@ function crossedTopics(map: MindMap): MMNode[] {
   });
 }
 
-/** Whether the user moved a topic or a boundary's frame since the map's last layout. */
+/** Whether the user moved a topic, a boundary's frame or a callout since the map's last layout. */
 const moved = (map: MindMap) =>
   [...map.nodes.values()].some((n) => { const s = shiftOf(n.el, n.data); return !!s && isMove(s); }) ||
-  [...map.boundaries.values()].some(reshaped);
+  [...map.boundaries.values()].some(reshaped) ||
+  [...map.callouts].some(([id, c]) => !c.el.customData?.[HIDDEN_KEY] && misplaced(c.el, map.nodes.get(id)!.el));
 
 /**
  * Once something is dropped, the maps of the selection are laid out when anything in them moved, so subtopics
@@ -934,6 +1089,7 @@ function reparentDropped(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap) {
   }
 
   let branches = target.children.length;
+  const colors = colorsIn(into);
   line.forEach((n, order) => {
     if (!moving.has(n.id)) {
       if (n.data.order !== order) tx.patch(n.id, { customData: { ...n.el.customData, [KEY]: { ...n.data, order } } });
@@ -941,16 +1097,16 @@ function reparentDropped(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap) {
     }
     if (across) moveToMap(tx, map, n, into.root.id);
     reparent(tx, n, target, order, central ? side : undefined);
-    if (central) restyle(tx, map, n, 1, branchColor(branches++));
-    else if (across || n.depth === 1 || mainOf(map, n) !== mainOf(into, target)) restyle(tx, map, n, target.depth + 1, branchOf(mainOf(into, target)));
+    if (central) restyle(tx, map, n, 1, branchColor(branches++, colors), colors);
+    else if (across || n.depth === 1 || mainOf(map, n) !== mainOf(into, target)) restyle(tx, map, n, target.depth + 1, branchOf(mainOf(into, target)), colors);
   });
   if (across) layoutMap(tx, ea, into.root.id);
 }
 
 /**
  * Hands the topic with everything under it over to another map: its subtopics, connectors, summary braces,
- * boundaries and fold badges. Its own connector goes; the new map draws one to its new parent. A central topic
- * brings its whole map, and stops being one.
+ * boundaries, callouts and fold badges. Its own connector goes; the new map draws one to its new parent. A central
+ * topic brings its whole map, and stops being one.
  */
 function moveToMap(tx: SceneTx, map: MindMap, n: MMNode, rootId: string) {
   const ids = new Set(subtree(n).map((x) => x.id));
@@ -958,6 +1114,7 @@ function moveToMap(tx: SceneTx, map: MindMap, n: MMNode, rootId: string) {
   const own = map.edges.get(n.id);
   if (own) removeEdge(tx, own);
   const frames = new Set([...map.boundaries.values()].filter((b) => ids.has(b.parent.id)).map((b) => b.id));
+  const bubbles = new Set([...map.callouts].filter(([id]) => ids.has(id)).map(([, c]) => c.el.id));
   for (const el of tx.live()) {
     const d = el.customData?.[KEY] as { root?: string } | undefined;
     if (!d || d.root !== map.root.id || el.id === own?.id) continue;
@@ -967,11 +1124,13 @@ function moveToMap(tx: SceneTx, map: MindMap, n: MMNode, rootId: string) {
       || ids.has(braceData(el)?.summary ?? "")
       || frames.has(boundaryData(el)?.self ?? "")
       || frames.has(titleData(el)?.boundary ?? "")
-      || ids.has(badgeData(el)?.node ?? "");
+      || ids.has(badgeData(el)?.node ?? "")
+      || ids.has(calloutData(el)?.node ?? "")
+      || bubbles.has(tailData(el)?.callout ?? "");
     if (goes) tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, root: rootId } } });
   }
   if (whole) {
-    const { structure: _, autoAlign: __, ...rest } = nodeData(tx.get(n.id))!;
+    const { structure: _, autoAlign: __, theme: ___, ...rest } = nodeData(tx.get(n.id))!;
     tx.patch(n.id, { customData: { ...tx.get(n.id)!.customData, [KEY]: rest } });
   }
 }
@@ -1360,7 +1519,7 @@ function labelOf(tx: SceneTx, el: El): El | null {
   const t = tid ? tx.get(tid) : undefined;
   if (!t || t.isDeleted) return null;
   if (!isRelationLabel(t))
-    tx.patch(t.id, { strokeColor: relationshipColors().text, customData: { ...t.customData, [KEY]: { relationLabel: true } } });
+    tx.patch(t.id, { strokeColor: colorsAt(tx, relationData(el)?.from).relationship.text, customData: { ...t.customData, [KEY]: { relationLabel: true } } });
   return tx.get(t.id)!;
 }
 
@@ -1432,7 +1591,7 @@ export async function addRelationship(view: ExcalidrawView, fromId: string, toId
     const { start, mid, end } = relationPoints(boxOf(a), boxOf(b), RELATION_BEND);
     ea.clear();
     Object.assign(ea.style, {
-      strokeColor: relationshipColors().line,
+      strokeColor: colorsAt(tx, fromId).relationship.line,
       strokeWidth: 1.5,
       strokeStyle: "dashed",
       roughness: a.roughness,
@@ -1535,9 +1694,11 @@ function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: Ou
   const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
   const obstacles = tx.live().filter((e) => !e.customData?.[HIDDEN_KEY]).map(boundsOf);
   const c = findFreeSpot(visible, obstacles, NEW_MAP_AREA, NEW_MAP_GAP);
+  const colors = colorsOf(newMapDefaults().theme);
   const id = createNode(tx, ea, {
     depth: 0,
-    branch: branchColor(0),
+    branch: branchColor(0, colors),
+    colors,
     text,
     data: { root: "", parent: null, order: 0, ...newMapDefaults() },
     at: { x: c.x - 90, y: c.y - 30 },
@@ -1558,13 +1719,14 @@ export async function addChild(view: ExcalidrawView, parentId: string) {
     if (!found) return null;
     const { map, node } = found;
     setFolded(tx, node, false); // like XMind, a new subtopic unfolds the topic
+    const colors = colorsIn(map);
     let side: Side | undefined;
     let branch: Branch;
     if (node.depth === 0) {
       // By the stored sides, so a map made one-sided comes out balanced when it is made free.
       const right = node.children.filter((c) => (c.data.side ?? "R") === "R").length;
       side = right <= node.children.length - right ? "R" : "L";
-      branch = branchColor(node.children.length);
+      branch = branchColor(node.children.length, colors);
     } else {
       // A summary's subtopics take the branch color of the topics it spans.
       branch = branchOf(node.covers ? map.nodes.get(node.covers[0])! : node);
@@ -1573,6 +1735,7 @@ export async function addChild(view: ExcalidrawView, parentId: string) {
     const id = createNode(tx, ea, {
       depth: node.depth + 1,
       branch,
+      colors,
       data: { root: map.root.id, parent: node.id, order, ...(side ? { side } : {}) },
       at: { x: node.el.x + node.el.width + 40, y: node.el.y },
       fontFamily: node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily,
@@ -1599,9 +1762,11 @@ export async function addSibling(view: ExcalidrawView, nodeId: string, above: bo
     const i = line.indexOf(node);
     const neighbour = after ? line[i + 1] : line[i - 1];
     const order = neighbour ? (node.data.order + neighbour.data.order) / 2 : node.data.order + (after ? 1 : -1);
+    const colors = colorsIn(map);
     const id = createNode(tx, ea, {
       depth: node.depth,
-      branch: node.depth === 1 ? branchColor(parent.children.length) : branchOf(node),
+      branch: node.depth === 1 ? branchColor(parent.children.length, colors) : branchOf(node),
+      colors,
       data: { root: map.root.id, parent: parent.id, order, ...(node.depth === 1 ? { side: node.data.side ?? (node.side as Side) } : {}) },
       at: { x: node.el.x, y: node.el.y + node.el.height + 10 },
       fontFamily: node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily,
@@ -1633,6 +1798,8 @@ function deleteSubtree(tx: SceneTx, map: MindMap, node: MMNode) {
     for (const b of x.boundaries) deleteBoundaryEls(tx, b);
     const badge = map.badges.get(x.id);
     if (badge) deleteWithText(tx, badge.el);
+    const callout = map.callouts.get(x.id);
+    if (callout) deleteCalloutEls(tx, callout);
     // Relationships go with the topic, other arrows that pointed at it are unbound.
     for (const b of x.el.boundElements ?? []) {
       const a = tx.get(b.id);
@@ -1687,6 +1854,7 @@ function removeTopic(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MM
     for (const e of map.strayBraces) tx.delete(e.id);
     for (const e of map.strayBoundaries) deleteWithText(tx, e);
     for (const e of map.strayBadges) deleteWithText(tx, e);
+    for (const e of map.strayCallouts) deleteWithText(tx, e);
     tx.api.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
     return null;
   }
@@ -1799,10 +1967,12 @@ export async function addSummary(view: ExcalidrawView, nodeIds: string[]) {
       return null;
     }
     const top = map.nodes.get(covers[0])!;
+    const colors = colorsIn(map);
     const id = createNode(tx, ea, {
       depth: top.depth,
       branch: branchOf(top),
-      style: summaryStyle(),
+      colors,
+      style: summaryStyle(colors),
       text: SUMMARY_TEXT,
       data: { root: map.root.id, parent: parent.id, order: 0, summary: covers, ...(top.depth === 1 ? { side: top.side as Side } : {}) },
       at: { x: top.el.x + top.el.width + 40, y: top.el.y },
@@ -1848,7 +2018,7 @@ export async function addBoundary(view: ExcalidrawView, nodeIds: string[]) {
       ...[...map.boundaries.values()].filter((b) => b.covers.every((id) => enclosed.has(id))).flatMap((b) => [b.el, b.title]),
     ];
     const indexes = below.map((el) => (el ? tx.indexOf(el.id) : -1)).filter((i) => i >= 0);
-    const els = createBoundary(ea, map.root.id, parent.id, ids, covered[0]);
+    const els = createBoundary(ea, map.root.id, parent.id, ids, covered[0], colorsIn(map));
     if (indexes.length) tx.insert(els, Math.min(...indexes));
     else els.forEach((el) => tx.add(el));
     layoutMap(tx, ea, map.root.id);
@@ -1882,6 +2052,97 @@ export async function editNode(view: ExcalidrawView, nodeId: string) {
   select(view, nodeId);
   await nextFrame();
   await startEditing(view, true);
+}
+
+// ---------- callouts ----------
+
+/**
+ * Adds a callout to the topic, like XMind's Callout: a note in a bubble right above it, and starts editing its text.
+ * A topic that already has one edits that one; summaries have none.
+ */
+export async function addCallout(view: ExcalidrawView, nodeId: string) {
+  const id = run(view, (tx, ea) => {
+    const found = mapOf(tx, nodeId);
+    if (!found) return null;
+    const { map, node } = found;
+    if (node.covers) {
+      new Notice("A summary can't have a callout.");
+      return null;
+    }
+    const existing = map.callouts.get(node.id);
+    if (existing) return existing.el.id;
+    const colors = colorsIn(map);
+    const els = createCallout(ea, map.root.id, node.id, node.el, node.text?.fontFamily ?? 1, CALLOUT_TEXT, colors);
+    tx.add(createTail(ea, map.root.id, els[0].id, node.el.roughness, colors, els[0].groupIds!)); // behind the bubble
+    els.forEach((el) => tx.add(el));
+    layoutMap(tx, ea, map.root.id);
+    return els[0].id;
+  });
+  if (id) await focusNode(view, id, true);
+}
+
+export async function editCallout(view: ExcalidrawView, calloutId: string) {
+  select(view, calloutId);
+  await nextFrame();
+  await startEditing(view, true);
+}
+
+/** Deletes a callout with its tail and selects its topic. */
+export async function deleteCallout(view: ExcalidrawView, calloutId: string) {
+  const node = run(view, (tx, ea) => {
+    const d = calloutData(tx.get(calloutId));
+    const c = d ? buildMap(tx.live(), d.root)?.callouts.get(d.node) : undefined;
+    if (!d || !c) return null;
+    deleteCalloutEls(tx, c);
+    layoutMap(tx, ea, d.root);
+    return d.node;
+  });
+  if (node) await focusNode(view, node, false);
+}
+
+/** Whether the callout has no text left; Excalidraw deletes the text of a container edited to nothing. */
+export function isEmptyCallout(view: ExcalidrawView, calloutId: string): boolean {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const el = els.find((e) => e.id === calloutId);
+  if (!calloutData(el)) return false;
+  const tid = boundTextId(el!);
+  return !textOf(els.find((e) => e.id === tid) ?? null).trim();
+}
+
+/** Whether the topic can get a callout: any topic but a summary. */
+export function canAddCallout(view: ExcalidrawView, nodeId: string): boolean {
+  return !nodeData(view.excalidrawAPI?.getSceneElements().find((e) => e.id === nodeId))?.summary;
+}
+
+/**
+ * Keeps callouts right above their topics when Excalidraw moves the topics itself, while dragging or on undo.
+ * A selected callout is left to the user; the next layout puts it back. Not an undo step of its own, the topics' move is.
+ */
+export function followCallouts(view: ExcalidrawView) {
+  const api = view.excalidrawAPI;
+  if (!api) return;
+  const els = api.getSceneElements();
+  if (!els.some((e) => calloutData(e))) return;
+  const sel = api.getAppState().selectedElementIds ?? {};
+  const byId = new Map(els.map((e) => [e.id, e]));
+  const tails = new Map(els.flatMap((e) => { const d = tailData(e); return d ? [[d.callout, e] as const] : []; }));
+  const tx = new SceneTx(view);
+  for (const el of els) {
+    const d = calloutData(el);
+    const topic = d ? byId.get(d.node) : undefined;
+    if (!d || !topic || topic.isDeleted || el.customData?.[HIDDEN_KEY]) continue;
+    const tid = boundTextId(el);
+    if (sel[el.id] || (tid && sel[tid])) continue;
+    const bubble = calloutBox(boxOf(topic), { w: el.width, h: el.height });
+    if (misplaced(el, topic)) {
+      tx.patch(el.id, { x: bubble.x, y: bubble.y });
+      const text = tid ? byId.get(tid) : undefined;
+      if (text) tx.patch(text.id, { x: text.x + bubble.x - el.x, y: text.y + bubble.y - el.y });
+    }
+    const tail = tails.get(el.id);
+    if (tail) placeTail(tx, tail, bubble, boxOf(topic));
+  }
+  tx.commit("NEVER");
 }
 
 export function navigate(view: ExcalidrawView, nodeId: string, dir: Direction) {
@@ -2017,10 +2278,10 @@ function reparent(tx: SceneTx, node: MMNode, parent: MMNode, order: number, side
  * Gives a topic moved to another level the look of its new one, and its subtree that branch's color. Topics under it
  * that cross the main-topic line with it (a central topic becoming a subtopic) take the look of their new level too.
  */
-function restyle(tx: SceneTx, map: MindMap, node: MMNode, depth: number, branch: Branch) {
+function restyle(tx: SceneTx, map: MindMap, node: MMNode, depth: number, branch: Branch, colors: Colors) {
   const level = (d: number) => Math.min(d, 2);
   const look = (x: MMNode, d: number) => {
-    const st = styleFor(d, branch);
+    const st = styleFor(d, branch, colors);
     tx.patch(x.id, { strokeColor: st.borderColor, backgroundColor: st.backgroundColor, strokeWidth: st.strokeWidth });
     if (x.text) tx.patch(x.text.id, { fontSize: st.fontSize, strokeColor: st.textColor });
   };
@@ -2052,8 +2313,9 @@ export async function promote(view: ExcalidrawView, nodeId: string) {
     const order = next ? (anchor.data.order + next.data.order) / 2 : anchor.data.order + (reversed ? -1 : 1);
     leaveRanges(tx, map, node);
     if (target === map.root) {
+      const colors = colorsIn(map);
       reparent(tx, node, target, order, anchor.data.side ?? (anchor.side as Side));
-      restyle(tx, map, node, 1, branchColor(target.children.length));
+      restyle(tx, map, node, 1, branchColor(target.children.length, colors), colors);
     } else {
       reparent(tx, node, target, order);
     }
@@ -2076,7 +2338,7 @@ export async function demote(view: ExcalidrawView, nodeId: string) {
     leaveRanges(tx, map, node);
     setFolded(tx, target, false); // keep the moved topic in view
     reparent(tx, node, target, order);
-    if (node.depth === 1) restyle(tx, map, node, 2, branchOf(target));
+    if (node.depth === 1) restyle(tx, map, node, 2, branchOf(target), colorsIn(map));
     layoutMap(tx, ea, map.root.id);
     return true;
   });
@@ -2104,19 +2366,21 @@ const lookOf = (el: El, keys: string[]): Partial<El> => {
 };
 
 /**
- * Copies the topic with everything under it: subtopics, summaries and boundaries, with their texts, looks, collapsed
- * topics and moves. Under the given parent of the map, or as the central topic of a new map when parentId is null.
- * Relationships stay with the original. Returns the copy.
+ * Copies the topic with everything under it: subtopics, summaries, boundaries and callouts, with their texts, looks,
+ * collapsed topics and moves. Under the given parent of the map, or as the central topic of a new map when parentId
+ * is null. Relationships stay with the original. Returns the copy.
  */
 function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode, parentId: string | null, data: Partial<NodeData>, at: Vec): string {
   const ids = new Map<string, string>(); // original -> copy
   let root = parentId === null ? "" : map.root.id;
+  const colors = colorsIn(map);
   for (const x of subtree(n)) {
     const top = x === n;
     const { self: _, lx, ly, ox, oy, ...rest } = x.data;
     const id = createNode(tx, ea, {
       depth: x.depth,
       branch: branchOf(x),
+      colors,
       text: topicText(x),
       data: {
         ...rest,
@@ -2134,12 +2398,22 @@ function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode
     tx.patch(id, lookOf(x.el, LOOK));
     const tid = boundTextId(tx.get(id)!);
     if (tid && x.text) tx.patch(tid, lookOf(x.text, TEXT_LOOK));
+    const c = map.callouts.get(x.id);
+    if (c) {
+      const els = createCallout(ea, root, id, tx.get(id)!, c.text?.fontFamily ?? 1, calloutText(c), colors);
+      Object.assign(els[0], lookOf(c.el, LOOK));
+      if (c.text) Object.assign(els[1], lookOf(c.text, TEXT_LOOK));
+      const tail = createTail(ea, root, els[0].id, c.el.roughness, colors, els[0].groupIds!);
+
+      if (c.tail) Object.assign(tail, lookOf(c.tail, LOOK));
+      [tail, ...els].forEach((el) => tx.add(el));
+    }
   }
   for (const b of map.boundaries.values()) {
     const parent = ids.get(b.parent.id);
     const topics = boundaryData(b.el)!.topics.flatMap((id) => ids.get(id) ?? []);
     if (!parent || !topics.length) continue;
-    const els = createBoundary(ea, root, parent, topics, map.nodes.get(b.covers[0])!);
+    const els = createBoundary(ea, root, parent, topics, map.nodes.get(b.covers[0])!, colors);
     Object.assign(els[0], lookOf(b.el, LOOK));
     if (b.title) Object.assign(els[1], lookOf(b.title, LOOK));
     const title = b.titleText?.rawText ?? b.titleText?.originalText ?? b.titleText?.text;
@@ -2198,7 +2472,9 @@ export async function duplicateNodes(view: ExcalidrawView, nodeIds: string[]) {
 // ---------- markdown outlines ----------
 
 // The Excalidraw plugin keeps the Markdown source, with [[links]], in rawText and shows it parsed.
-const topicText = (n: MMNode) => n.text?.rawText ?? n.text?.originalText ?? n.text?.text ?? "";
+const textOf = (t: El | null) => t?.rawText ?? t?.originalText ?? t?.text ?? "";
+const topicText = (n: MMNode) => textOf(n.text);
+const calloutText = (c: MMCallout) => textOf(c.text);
 
 /**
  * Subtopics top to bottom; for the central topic the right side first, or clockwise in a balanced map
@@ -2239,10 +2515,11 @@ function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMN
   // Like addChild: main topics alternate sides and take the next branch color, others the color of their branch.
   let right = node.children.filter((c) => (c.data.side ?? "R") === "R").length;
   let count = node.children.length;
+  const colors = colorsIn(map);
   const inherited = node.parent ? branchOf(node.covers ? map.nodes.get(node.covers[0])! : node) : null;
   const add = (parent: string, depth: number, branch: Branch, it: OutlineItem, order: number, side?: Side): string => {
     const data = { root: map.root.id, parent, order, ...(side ? { side } : {}) };
-    const id = createNode(tx, ea, { depth, branch, text: it.text, data, at, fontFamily, roughness: node.el.roughness });
+    const id = createNode(tx, ea, { depth, branch, colors, text: it.text, data, at, fontFamily, roughness: node.el.roughness });
     it.children.forEach((c, i) => add(id, depth + 1, branch, c, i));
     return id;
   };
@@ -2251,7 +2528,7 @@ function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMN
     if (inherited) return add(node.id, node.depth + 1, inherited, it, first + i);
     const side: Side = right <= count - right ? "R" : "L";
     if (side === "R") right++;
-    return add(node.id, 1, branchColor(count++), it, first + i, side);
+    return add(node.id, 1, branchColor(count++, colors), it, first + i, side);
   });
 }
 
@@ -2344,12 +2621,25 @@ export function onlyMap(view: ExcalidrawView): string | null {
   return roots.length === 1 ? roots[0] : null;
 }
 
-/** The structure and auto-align of the node's map. */
-export function layoutOf(view: ExcalidrawView, nodeId: string | null): { structure: Structure; autoAlign: boolean } | null {
+export interface MapLayout { structure: Structure; autoAlign: boolean; theme: Theme; }
+
+/** The structure, auto-align and theme of the node's map. */
+export function layoutOf(view: ExcalidrawView, nodeId: string | null): MapLayout | null {
   const els = view.excalidrawAPI?.getSceneElements() ?? [];
   const root = nodeData(els.find((e) => e.id === nodeId))?.root;
   const d = root ? nodeData(els.find((e) => e.id === root)) : null;
-  return d ? { structure: structureIn(d), autoAlign: autoAligned(d) } : null;
+  return d ? { structure: structureIn(d), autoAlign: autoAligned(d), theme: themeIn(d) } : null;
+}
+
+/** Gives the node's map another theme and recolors it with the theme's colors. Its layout and font sizes stay. */
+export function setTheme(view: ExcalidrawView, nodeId: string, theme: Theme) {
+  run(view, (tx) => {
+    const r = rootIdOf(tx.get(nodeId));
+    const map = r ? buildMap(tx.live(), r) : null;
+    if (!r || !map) return;
+    tx.patch(r, { customData: { ...map.root.el.customData, [KEY]: { ...map.root.data, theme } } });
+    restyleMap(tx, map, colorsOf(theme), false);
+  });
 }
 
 /** Turns auto-align of the node's map on, dropping every manual move, or off, keeping the positions as they are. */
@@ -2380,18 +2670,20 @@ function patchChanged(tx: SceneTx, el: El | null | undefined, p: Partial<El>) {
   if (changed.length) tx.patch(el.id, Object.fromEntries(changed));
 }
 
-function applyNodeStyle(tx: SceneTx, n: MMNode, st: NodeStyle) {
+/** Gives the topic the colors of the style, and with full its lines and font size too. */
+function applyNodeStyle(tx: SceneTx, n: MMNode, st: NodeStyle, full: boolean) {
   patchChanged(tx, n.el, {
-    strokeColor: st.borderColor, backgroundColor: st.backgroundColor, fillStyle: "solid", strokeWidth: st.strokeWidth, strokeStyle: "solid",
+    strokeColor: st.borderColor, backgroundColor: st.backgroundColor,
+    ...(full ? { fillStyle: "solid", strokeWidth: st.strokeWidth, strokeStyle: "solid" } : {}),
   });
-  patchChanged(tx, n.text, { strokeColor: st.textColor, fontSize: st.fontSize });
+  patchChanged(tx, n.text, { strokeColor: st.textColor, ...(full ? { fontSize: st.fontSize } : {}) });
 }
 
 /**
- * Restyles the whole map from the current settings, as if every topic had just been created:
- * colors, font sizes and lines of topics, summaries, connectors, braces and boundaries,
- * main topics taking the branch colors in turn. Manual moves are dropped too. Texts, fonts
- * and collapsed topics stay. Applies to the map of the given node, or every map in the drawing.
+ * Restyles the whole map from its theme, as if every topic had just been created: colors, font sizes and lines
+ * of topics, summaries, connectors, braces, boundaries and callouts, main topics taking the branch colors in turn.
+ * Manual moves are dropped too. Texts, fonts and collapsed topics stay. Applies to the map of the given node,
+ * or every map in the drawing.
  */
 export function resetAll(view: ExcalidrawView, nodeId?: string) {
   run(view, (tx, ea) => {
@@ -2399,46 +2691,60 @@ export function resetAll(view: ExcalidrawView, nodeId?: string) {
     for (const root of r ? [r] : rootsIn(tx.live())) {
       const map = settledMap(tx, ea, root);
       if (!map) continue;
-      restyleMap(tx, map);
+      restyleMap(tx, map, colorsIn(map), true);
       dropOffsets(tx, [...map.nodes.values()]);
       layoutMap(tx, ea, root);
     }
   });
 }
 
-function restyleMap(tx: SceneTx, map: MindMap) {
+/**
+ * Gives everything of the map the colors given, main topics taking the branch colors in turn, and the relationships
+ * touching it theirs. With full, also the lines, arrowheads, font sizes and relationship curves of new ones.
+ */
+function restyleMap(tx: SceneTx, map: MindMap, colors: Colors, full: boolean) {
   const branches = new Map<string, Branch>(); // topic id -> its branch
   // In their order: as they were added, or clockwise in a balanced map.
-  [...map.root.children].sort(byOrder).forEach((c, i) => branches.set(c.id, branchColor(i)));
+  [...map.root.children].sort(byOrder).forEach((c, i) => branches.set(c.id, branchColor(i, colors)));
   const visit = (n: MMNode, branch: Branch) => {
-    applyNodeStyle(tx, n, n.depth === 0 ? styleFor(0, branch) : n.covers ? summaryStyle() : styleFor(n.depth, branch));
+    const st = n.depth === 0 ? styleFor(0, branch, colors) : n.covers ? summaryStyle(colors) : styleFor(n.depth, branch, colors);
+    applyNodeStyle(tx, n, st, full);
     for (const c of n.children) visit(c, branches.get(c.id) ?? branch);
     // A summary's subtopics take the branch of the topics it spans.
     for (const s of n.summaries) visit(s.node, branches.get(s.covers[0]) ?? branch);
   };
-  visit(map.root, branchColor(0));
+  visit(map.root, branchColor(0, colors));
 
+  const lines = (p: Partial<El>) => (full ? p : {});
   for (const n of map.nodes.values()) {
     const edge = map.edges.get(n.id);
     const color = tx.get(n.id)!.strokeColor;
     patchChanged(tx, edge, {
-      strokeColor: color, strokeWidth: n.depth === 1 ? 2 : 1.5, strokeStyle: "solid", startArrowhead: null, endArrowhead: connectorArrowhead(),
+      strokeColor: color, ...lines({ strokeWidth: n.depth === 1 ? 2 : 1.5, strokeStyle: "solid", startArrowhead: null, endArrowhead: connectorArrowhead() }),
     });
-    patchChanged(tx, map.braces.get(n.id), { strokeColor: color, strokeWidth: 2, strokeStyle: "solid" });
+    patchChanged(tx, map.braces.get(n.id), { strokeColor: color, ...lines({ strokeWidth: 2, strokeStyle: "solid" }) });
   }
+  const r = colors.relationship;
   for (const el of tx.live()) {
     const d = relationData(el);
     if (!d || !inMap(map, d)) continue;
-    const color = relationshipColors();
-    patchChanged(tx, el, { strokeColor: color.line, strokeWidth: 1.5, strokeStyle: "dashed", startArrowhead: null, endArrowhead: "arrow" });
-    if (d.bend !== RELATION_BEND) tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, bend: RELATION_BEND } } });
+    patchChanged(tx, el, { strokeColor: r.line, ...lines({ strokeWidth: 1.5, strokeStyle: "dashed", startArrowhead: null, endArrowhead: "arrow" }) });
+    if (full && d.bend !== RELATION_BEND) tx.patch(el.id, { customData: { ...el.customData, [KEY]: { ...d, bend: RELATION_BEND } } });
     const tid = boundTextId(el);
-    patchChanged(tx, tid ? tx.get(tid) : null, { strokeColor: color.text });
+    patchChanged(tx, tid ? tx.get(tid) : null, { strokeColor: r.text });
   }
-  const c = boundaryColors();
-  for (const b of map.boundaries.values()) {
-    patchChanged(tx, b.el, { strokeColor: c.line, backgroundColor: c.fill, fillStyle: "solid", strokeWidth: 2, strokeStyle: "dashed" });
-    patchChanged(tx, b.title, { strokeColor: c.titleFill, backgroundColor: c.titleFill, fillStyle: "solid", strokeWidth: 1, strokeStyle: "solid" });
-    patchChanged(tx, b.titleText, { strokeColor: c.title, fontSize: TITLE_FONT_SIZE });
+  const b = colors.boundary;
+  for (const x of map.boundaries.values()) {
+    patchChanged(tx, x.el, { strokeColor: b.line, backgroundColor: b.fill, ...lines({ fillStyle: "solid", strokeWidth: 2, strokeStyle: "dashed" }) });
+    patchChanged(tx, x.title, { strokeColor: b.titleFill, backgroundColor: b.titleFill, ...lines({ fillStyle: "solid", strokeWidth: 1, strokeStyle: "solid" }) });
+    patchChanged(tx, x.titleText, { strokeColor: b.title, ...lines({ fontSize: TITLE_FONT_SIZE }) });
+  }
+  const c = colors.callout;
+  for (const x of map.callouts.values()) {
+    const shape = lines({ fillStyle: "solid", strokeWidth: 1, strokeStyle: "solid" });
+    patchChanged(tx, x.el, { strokeColor: c.border, backgroundColor: c.fill, ...shape });
+    patchChanged(tx, x.tail, { strokeColor: c.border, backgroundColor: c.fill, ...shape });
+    patchChanged(tx, x.text, { strokeColor: c.text, ...lines({ fontSize: CALLOUT_FONT_SIZE }) });
   }
 }
+

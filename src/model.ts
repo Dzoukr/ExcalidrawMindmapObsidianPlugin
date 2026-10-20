@@ -28,6 +28,7 @@ export interface NodeData {
   side?: Side; // level-1 nodes only: the side in a free map, kept while the map has another structure
   structure?: Structure; // central topic only, free when not set: maps made before there were structures
   autoAlign?: boolean; // central topic only: no topic keeps a manual position; off when not set, as in maps made before
+  theme?: string; // central topic only: the colors of the map, custom (from the settings) when not set
   summary?: string[]; // summary topic: ids of the siblings it spans, the range runs from the first to the last still present
   folded?: boolean; // subtopics, summaries and boundaries are hidden
   ox?: number; // manual offset
@@ -79,6 +80,21 @@ export interface BadgeData {
   node: string;
 }
 
+/** Callout: a note in a bubble right above its topic, pointed at it by a tail. One per topic, not on summaries. */
+export interface CalloutData {
+  callout: true;
+  self: string;
+  root: string;
+  node: string;
+}
+
+/** The tail of a callout: a filled triangle from behind the bubble to its topic. */
+export interface TailData {
+  calloutTail: true;
+  root: string;
+  callout: string;
+}
+
 export interface HiddenState {
   opacity: number;
   locked: boolean;
@@ -89,6 +105,12 @@ export interface HiddenState {
 export interface MMBadge {
   el: El;
   text: El | null;
+}
+
+export interface MMCallout {
+  el: El; // the bubble, a container
+  text: El | null;
+  tail: El | null;
 }
 
 export interface MMBoundary extends LBoundary {
@@ -133,6 +155,8 @@ export interface MindMap {
   strayBoundaries: El[]; // frames and titles left without a boundary to belong to
   badges: Map<string, MMBadge>; // folded node id -> badge
   strayBadges: El[];
+  callouts: Map<string, MMCallout>; // node id -> its callout
+  strayCallouts: El[]; // bubbles and tails left without a topic or a bubble to belong to
 }
 
 /** The mind map data stored on the element, not yet known to be of any particular kind. */
@@ -143,7 +167,7 @@ function stored(el: El | undefined | null): Record<string, unknown> | null {
 
 export function nodeData(el: El | undefined | null): NodeData | null {
   const d = stored(el);
-  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.relation || d.self !== el?.id) return null;
+  if (!d || d.edge || d.boundary || d.boundaryTitle || d.badge || d.relation || d.callout || d.self !== el?.id) return null;
   return d as unknown as NodeData;
 }
 
@@ -172,6 +196,16 @@ export function badgeData(el: El | undefined | null): BadgeData | null {
   return d?.badge && d.self === el?.id ? (d as unknown as BadgeData) : null;
 }
 
+export function calloutData(el: El | undefined | null): CalloutData | null {
+  const d = stored(el);
+  return d?.callout && d.self === el?.id ? (d as unknown as CalloutData) : null;
+}
+
+export function tailData(el: El | undefined | null): TailData | null {
+  const d = stored(el);
+  return d?.calloutTail ? (d as unknown as TailData) : null;
+}
+
 /** Whether the element is a relationship label already given the label color. */
 export function isRelationLabel(el: El | undefined | null): boolean {
   return !!stored(el)?.relationLabel;
@@ -183,9 +217,9 @@ export function hiddenState(el: El | undefined | null): HiddenState | null {
   return h && typeof h === "object" ? (h as HiddenState) : null;
 }
 
-/** Root id of the map a node, boundary frame or boundary title belongs to. */
+/** Root id of the map a node, boundary frame, boundary title, callout or callout tail belongs to. */
 export function rootIdOf(el: El | undefined | null): string | null {
-  return nodeData(el)?.root ?? boundaryData(el)?.root ?? titleData(el)?.root ?? null;
+  return nodeData(el)?.root ?? boundaryData(el)?.root ?? titleData(el)?.root ?? calloutData(el)?.root ?? tailData(el)?.root ?? null;
 }
 
 export function braceData(el: El | undefined | null): BraceData | null {
@@ -418,7 +452,35 @@ export function buildMap(elements: readonly El[], rootId: string): MindMap | nul
     const text = tid ? byId.get(tid) : undefined;
     badges.set(d.node, { el, text: text && !text.isDeleted ? text : null });
   }
-  return { root, nodes, edges, strayEdges, braces, strayBraces, boundaries, strayBoundaries, badges, strayBadges };
+
+  const callouts = new Map<string, MMCallout>();
+  const strayCallouts: El[] = [];
+  const bubbles = new Map<string, MMCallout>(); // callout id -> callout
+  for (const el of elements) {
+    if (el.isDeleted) continue;
+    const d = calloutData(el);
+    if (!d || d.root !== rootId) continue;
+    const n = nodes.get(d.node);
+    if (!n || n.covers || callouts.has(d.node)) {
+      strayCallouts.push(el);
+      continue;
+    }
+    const tid = boundTextId(el);
+    const text = tid ? byId.get(tid) : undefined;
+    const c: MMCallout = { el, text: text && !text.isDeleted ? text : null, tail: null };
+    callouts.set(d.node, c);
+    bubbles.set(el.id, c);
+    n.callout = el.id;
+  }
+  for (const el of elements) {
+    if (el.isDeleted) continue;
+    const d = tailData(el);
+    if (!d || d.root !== rootId) continue;
+    const c = bubbles.get(d.callout);
+    if (!c || c.tail) strayCallouts.push(el);
+    else c.tail = el;
+  }
+  return { root, nodes, edges, strayEdges, braces, strayBraces, boundaries, strayBoundaries, badges, strayBadges, callouts, strayCallouts };
 }
 
 /** Whether a folded ancestor (or the topic owning a summary) hides the node. */

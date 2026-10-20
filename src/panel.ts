@@ -1,5 +1,6 @@
 import { Menu, setIcon } from "obsidian";
 import { STRUCTURES, Structure } from "./model";
+import { Theme, colorsOf, themeName, themeOptions } from "./styles";
 
 export interface PanelActions {
   newMap: () => void;
@@ -8,6 +9,7 @@ export interface PanelActions {
   addSummary: () => void;
   addBoundary: () => void;
   addRelationship: () => void;
+  addCallout: () => void;
   edit: () => void;
   remove: () => void;
   toggleFold: () => void;
@@ -19,6 +21,7 @@ export interface PanelActions {
   reset: () => void;
   resetAll: () => void;
   setStructure: (s: Structure) => void;
+  setTheme: (t: Theme) => void;
   toggleAutoAlign: () => void;
   togglePause: () => void;
 }
@@ -31,11 +34,13 @@ export interface PanelState {
   pair: boolean; // exactly two topics or boundaries are selected, to connect with a relationship
   siblings: boolean; // the selection is one or more sibling topics that can get a summary or a boundary
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
+  callout: boolean; // a callout is selected instead of a node
+  calloutable: boolean; // the selected node can get a callout, or has one to edit
   foldable: boolean; // that node can be collapsed or expanded
   collapsed: boolean; // that node is collapsed
   promote: boolean; // that node can be promoted to its parent's level
   demote: boolean; // that node can be demoted under the sibling above
-  layout: { structure: Structure; autoAlign: boolean } | null; // of the selected topic's map, or of the only map in the drawing
+  layout: { structure: Structure; autoAlign: boolean; theme: Theme } | null; // of the selected topic's map, or of the only map in the drawing
   canDeleteRoot: boolean; // deleting the central topic (and so the whole map) is allowed, or it is the map's only topic
   paused: boolean; // the plugin leaves keys and edits to Excalidraw
 }
@@ -47,9 +52,33 @@ export const PANEL_POSITIONS: Record<PanelPosition, string> = { bottom: "Bottom"
 
 export const isPanelPosition = (p: unknown): p is PanelPosition => typeof p === "string" && Object.prototype.hasOwnProperty.call(PANEL_POSITIONS, p);
 
+/** How the panel looks: like Obsidian's own toolbars, in the accent color, standing out from the theme, see-through, or with colored icons. */
+export type PanelStyle = "default" | "accent" | "contrast" | "translucent" | "colorful";
+
+export const PANEL_STYLES: Record<PanelStyle, string> = {
+  default: "Default",
+  accent: "Accent color",
+  contrast: "High contrast",
+  translucent: "Translucent",
+  colorful: "Colorful icons",
+};
+
+export const isPanelStyle = (p: unknown): p is PanelStyle => typeof p === "string" && Object.prototype.hasOwnProperty.call(PANEL_STYLES, p);
+
+/** A theme's name after a few of its colors: the central topic and the first branches. */
+export function themeTitle(t: Theme): DocumentFragment {
+  const c = colorsOf(t);
+  return createFragment((f) => {
+    const swatches = f.createSpan({ cls: "mm-swatches" });
+    for (const color of [c.central.fill, ...c.branches.slice(0, 4).map((b) => b.stroke)])
+      swatches.createSpan({ cls: "mm-swatch" }).setCssProps({ "--mm-swatch": color });
+    f.appendText(themeName(t) ?? "Missing theme");
+  });
+}
+
 type Key =
-  | "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "edit" | "remove"
-  | "copy" | "paste" | "duplicate" | "promote" | "demote" | "fold" | "layout" | "pause" | "more";
+  | "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "callout" | "edit" | "remove"
+  | "copy" | "paste" | "duplicate" | "promote" | "demote" | "fold" | "layout" | "theme" | "pause" | "more";
 
 /**
  * Floating control bar docked on an Excalidraw view. On desktop every action has its button; on phones and tablets
@@ -60,9 +89,10 @@ export class FloatingPanel {
   private readonly buttons = new Map<Key, HTMLButtonElement>();
   private state: PanelState | null = null;
   private position: PanelPosition = "bottom";
+  private style: PanelStyle = "default";
 
   constructor(private readonly a: PanelActions, compact: boolean) {
-    this.el = createDiv({ cls: "mm-panel mm-pos-bottom" });
+    this.el = createDiv({ cls: "mm-panel mm-pos-bottom mm-style-default" });
     const group = () => this.el.createDiv({ cls: "mm-group" });
     const button = (g: HTMLElement, key: Key, icon: string, label: string, fn: (b: HTMLButtonElement) => void) => {
       const b = g.createEl("button", { cls: "mm-btn clickable-icon", attr: { "aria-label": label } });
@@ -84,6 +114,7 @@ export class FloatingPanel {
     button(g2, "summary", "braces", "Add summary of the selected topics", a.addSummary);
     button(g2, "boundary", "square-dashed", "Add boundary around the selected topics", a.addBoundary);
     button(g2, "relation", "spline", "Add relationship from the first to the second selected topic or boundary", a.addRelationship);
+    if (!compact) button(g2, "callout", "message-square", "Add callout, a note above the topic", a.addCallout);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
     if (compact) {
@@ -104,8 +135,25 @@ export class FloatingPanel {
       this.layoutItems(menu);
       this.showMenu(menu, b);
     });
+    button(g4, "theme", "palette", "Theme", (b) => {
+      const menu = new Menu();
+      this.themeItems(menu);
+      this.showMenu(menu, b);
+    });
     button(group(), "pause", "pause", "", a.togglePause);
   }
+
+  /** The themes, the presets and then the user's own, the one of the selected topic's map checked. */
+  private themeItems(menu: Menu) {
+    const l = this.state?.layout ?? null;
+    menu.addItem((i) => i.setTitle(l ? "Theme" : "Theme (select a topic of the map)").setIsLabel(true));
+    const themes = themeOptions();
+    for (const t of themes) {
+      if (t.user && !themes[themes.indexOf(t) - 1].user) menu.addSeparator();
+      menu.addItem((i) => i.setTitle(themeTitle(t.id)).setChecked(l?.theme === t.id).setDisabled(!l).onClick(() => this.a.setTheme(t.id)));
+    }
+  }
+
 
   /** Structure, auto-align and the resets of the selected topic's map. */
   private layoutItems(menu: Menu) {
@@ -135,12 +183,15 @@ export class FloatingPanel {
     item("Copy as Markdown", "copy", !!s?.topics, a.copy);
     item(s?.node ? "Paste Markdown as subtopics" : "Paste Markdown as a new map", "clipboard-paste", true, a.paste);
     item("Duplicate with subtopics", "copy-plus", !!s && (s.topics || s.node) && !s.summary, a.duplicate);
+    item("Add callout", "message-square", !!s?.calloutable, a.addCallout);
     menu.addSeparator();
     item("Promote to the parent's level", "indent-decrease", !!s?.promote, a.promote);
     item("Demote under the topic above", "indent-increase", !!s?.demote, a.demote);
     item(s?.collapsed ? "Expand" : "Collapse", s?.collapsed ? "chevrons-up-down" : "chevrons-down-up", !!s?.foldable, a.toggleFold);
     menu.addSeparator();
     this.layoutItems(menu);
+    menu.addSeparator();
+    this.themeItems(menu);
     menu.addSeparator();
     item("Pause mind map editing (use Excalidraw's own shortcuts)", "pause", true, a.togglePause);
     return menu;
@@ -157,6 +208,13 @@ export class FloatingPanel {
     this.el.removeClass(`mm-pos-${this.position}`);
     this.el.addClass(`mm-pos-${p}`);
     this.position = p;
+  }
+
+  setStyle(s: PanelStyle) {
+    if (s === this.style) return;
+    this.el.removeClass(`mm-style-${this.style}`);
+    this.el.addClass(`mm-style-${s}`);
+    this.style = s;
   }
 
   /** Opens the menu from the button, toward the canvas rather than off the edge the panel is docked on. */
@@ -190,14 +248,16 @@ export class FloatingPanel {
       const b = this.buttons.get(k);
       if (b) b.disabled = !enabled;
     };
-    for (const k of ["newMap", "paste", "layout", "pause", "more"] as Key[]) set(k, true);
+    for (const k of ["newMap", "paste", "layout", "theme", "pause", "more"] as Key[]) set(k, true);
     set("child", s.node);
     set("sibling", s.node && !s.root && !s.summary);
     set("summary", s.siblings);
     set("boundary", s.siblings);
     set("relation", s.pair);
-    set("edit", s.node || s.boundary);
-    set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary);
+    set("callout", s.calloutable);
+    set("edit", s.node || s.boundary || s.callout);
+    set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary || s.callout);
+
     set("copy", s.topics);
     set("duplicate", (s.topics || s.node) && !s.summary);
     set("promote", s.promote);

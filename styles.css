@@ -94,6 +94,115 @@
   pointer-events: none;
 }
 
+/* Panel styles. Buttons take their icon and hover colors from these variables, as Obsidian's own icons do. */
+
+/* Accent color: the panel in the theme's accent, its icons in the color text on it has. */
+.mm-panel.mm-style-accent {
+  --icon-color: var(--text-on-accent);
+  --icon-color-hover: var(--text-on-accent);
+  --icon-color-focused: var(--text-on-accent);
+  --background-modifier-hover: rgba(255, 255, 255, 0.18);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+.mm-panel.mm-style-accent .mm-group + .mm-group {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.mm-panel.mm-style-accent.mm-paused .mm-btn.is-active {
+  color: var(--interactive-accent);
+  background-color: var(--text-on-accent);
+}
+
+/* High contrast: dark in a light theme, light in a dark one, so it stands out from the drawing. */
+.theme-light .mm-panel.mm-style-contrast {
+  --mm-panel-bg: #1e1e1e;
+  --mm-panel-fg: #f1f3f5;
+  --mm-panel-hover: rgba(255, 255, 255, 0.14);
+  --mm-panel-line: rgba(255, 255, 255, 0.22);
+}
+
+.theme-dark .mm-panel.mm-style-contrast {
+  --mm-panel-bg: #f1f3f5;
+  --mm-panel-fg: #1e1e1e;
+  --mm-panel-hover: rgba(0, 0, 0, 0.08);
+  --mm-panel-line: rgba(0, 0, 0, 0.15);
+}
+
+.mm-panel.mm-style-contrast {
+  --icon-color: var(--mm-panel-fg);
+  --icon-color-hover: var(--mm-panel-fg);
+  --icon-color-focused: var(--mm-panel-fg);
+  --background-modifier-hover: var(--mm-panel-hover);
+  background: var(--mm-panel-bg);
+  border-color: var(--mm-panel-bg);
+}
+
+.mm-panel.mm-style-contrast .mm-group + .mm-group {
+  border-color: var(--mm-panel-line);
+}
+
+.mm-panel.mm-style-contrast.mm-paused .mm-btn.is-active {
+  color: var(--mm-panel-bg);
+  background-color: var(--mm-panel-fg);
+}
+
+/* Translucent: the drawing shows through, blurred. */
+.mm-panel.mm-style-translucent {
+  background: color-mix(in srgb, var(--background-primary) 65%, transparent);
+  border-color: color-mix(in srgb, var(--background-modifier-border) 60%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Colorful icons: each group of buttons in a color of its own. */
+.mm-panel.mm-style-colorful .mm-group:nth-child(6n + 1) {
+  --icon-color: var(--color-blue);
+  --icon-color-hover: var(--color-blue);
+}
+
+.mm-panel.mm-style-colorful .mm-group:nth-child(6n + 2) {
+  --icon-color: var(--color-green);
+  --icon-color-hover: var(--color-green);
+}
+
+.mm-panel.mm-style-colorful .mm-group:nth-child(6n + 3) {
+  --icon-color: var(--color-orange);
+  --icon-color-hover: var(--color-orange);
+}
+
+.mm-panel.mm-style-colorful .mm-group:nth-child(6n + 4) {
+  --icon-color: var(--color-purple);
+  --icon-color-hover: var(--color-purple);
+}
+
+.mm-panel.mm-style-colorful .mm-group:nth-child(6n + 5) {
+  --icon-color: var(--color-cyan);
+  --icon-color-hover: var(--color-cyan);
+}
+
+.mm-panel.mm-style-colorful .mm-group:nth-child(6n) {
+  --icon-color: var(--color-red);
+  --icon-color-hover: var(--color-red);
+}
+
+/* A theme in the theme menu: a few of its colors before its name. */
+.mm-swatches {
+  display: inline-flex;
+  gap: 2px;
+  margin-inline-end: 8px;
+  vertical-align: middle;
+}
+
+.mm-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--mm-swatch);
+  box-shadow: 0 0 0 1px var(--background-modifier-border);
+}
+
 /* Clear Excalidraw's bottom toolbar on phones and tablets. */
 body.is-mobile .mm-panel.mm-pos-bottom {
   bottom: 72px;

@@ -20,6 +20,7 @@ export type El = {
   versionNonce?: number;
   updated?: number;
   customData?: Record<string, unknown>;
+  groupIds?: string[]; // innermost first
   boundElements?: { id: string; type: string }[] | null;
   containerId?: string | null;
   strokeColor: string;
@@ -38,6 +39,7 @@ export type El = {
   endBinding?: Binding | null;
   startArrowhead?: string | null;
   endArrowhead?: string | null;
+  polygon?: boolean; // a closed line, which Excalidraw fills
   // text
   text?: string;
   originalText?: string;
@@ -50,6 +52,8 @@ export type El = {
 
 export interface AppState {
   selectedElementIds?: Record<string, boolean>;
+  selectedGroupIds?: Record<string, boolean>;
+  editingGroupId?: string | null; // the group double-clicked into, whose elements are selected one by one
   editingTextElement?: El | null;
   viewModeEnabled?: boolean;
   zoom?: { value: number };

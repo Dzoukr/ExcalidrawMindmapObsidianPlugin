@@ -47,7 +47,11 @@ New maps get the structure set in the settings. Maps made before version 1.2 are
 
 ### 🧩 Summaries, boundaries and relationships
 
-Select sibling topics to add a **summary**, a topic behind a brace that spans them; drag a topic above or below the brace to take it out, or next to the brace to add it. Or add a **boundary**, a dashed frame with a title around them; drag a topic out of the frame to take it out of the boundary, or drag a sibling in to add it. Resize the frame to take in exactly the topics inside it, or move it to move its topics along, even to the other side. A **relationship** is a curved, labeled arrow between any two topics or boundaries, even in different maps, and it stays attached when they move. Drag either end onto another topic or boundary to reconnect it.
+Select sibling topics to add a **summary**, a topic behind a brace that spans them; drag a topic above or below the brace to take it out, or next to the brace to add it. Or add a **boundary**, a dashed frame with a title around them; drag a topic out of the frame to take it out of the boundary, or drag a sibling in to add it. The frame and its title are grouped, so clicking either selects both and they move together; move them to move the topics along, even to the other side. To resize the frame alone, double-click into the group and select it: it then takes in exactly the topics inside it. A **relationship** is a curved, labeled arrow between any two topics or boundaries, even in different maps, and it stays attached when they move. Drag either end onto another topic or boundary to reconnect it.
+
+### 💬 Callouts
+
+A **callout** is a short note in a bubble right above a topic, pointing at it, like XMind's callout. Add one from the panel or with the command "Add callout to selected topic"; it opens for typing right away. Enter finishes it, Shift+Enter starts a new line. The bubble and its tail are grouped, so they are selected together; the callout moves with its topic and the map makes room for it. Select it and press Space or Enter to edit it, or Delete to remove it; a callout edited to no text is removed too. A topic has at most one callout (adding another edits the one it has), summaries have none, and it goes when its topic is deleted. Duplicating a topic copies its callout too.
 
 ### 🪗 Collapse and expand
 
@@ -67,13 +71,17 @@ Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into
 
 Type `[[` in a topic to open Excalidraw's link suggester for notes, headings, blocks and tags. Ctrl+click the topic to open the note. Links are kept when topics are copied as Markdown and pasted back.
 
-### 🎨 Your colors
+### 🎨 Themes and your colors
 
-Pick the colors of the central topic, branches, summaries, boundaries and relationships in the settings. **Reset all** restyles existing maps with them.
+Each map has its own **theme**, picked from the panel's **Theme** button (in its **⋯** menu on phones and tablets) or with the command "Change theme of the mind map". The built-in ones are **Classic**, **Pastel**, **Ocean**, **Sunset**, **Forest** and **Monochrome**; your own themes follow them. Changing it recolors the whole map at once and keeps its layout. New maps get the theme set in the settings.
+
+Make your own themes on the **Themes** page of the settings: add one starting from any theme, then pick the colors of its central topic, branches, summaries, boundaries, relationships and callouts. Export all of them as JSON to the clipboard or to a file in the vault, and import them in another vault, from the clipboard or a file. **Reset all** restyles a map with its theme's colors.
 
 ### 📱 Works on mobile
 
-A floating panel offers every action. On phones and tablets it keeps the buttons that add, edit and delete topics, summaries, boundaries and relationships, and puts the rest in its **⋯** menu so it fits the screen. You can build maps without a keyboard.
+A floating panel offers every action. On phones and tablets it keeps the buttons that add, edit and delete topics, summaries, boundaries and relationships, and puts the rest, callouts and themes among them, in its **⋯** menu so it fits the screen. You can build maps without a keyboard.
+
+The panel comes in several styles, chosen in the settings: **Default** like Obsidian's own toolbars, **Accent color**, **High contrast** (dark in a light theme, light in a dark one), **Translucent** over the drawing, or **Colorful icons**.
 
 ### ✏️ Still plain Excalidraw
 
@@ -87,21 +95,28 @@ All options are in **Settings → Excalidraw Mind Map**.
 |---|---|---|
 | Show control panel on desktop | On | Shows the floating panel on desktop. On phones and tablets it is always shown. |
 | Control panel position | Bottom | A row at the bottom or top of the drawing, or a column on its left or right side. On phones, Bottom shows it at the top, clear of Excalidraw's own toolbars. |
+| Control panel style | Default | How the panel looks: Default, Accent color, High contrast, Translucent or Colorful icons. |
 | Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. A central topic with no other topics can be deleted either way. |
 | Structure of new maps | Balanced | How main topics are placed around the central topic: balanced, free, right or left. Each map keeps its own. |
 | Auto-align new maps | On | Topics keep their automatic places and a drop moves a topic among its siblings, instead of leaving it where it is dropped. Each map keeps its own. |
+| Theme of new maps | Custom | The colors of new maps: a built-in theme or one of your own. Each map keeps its own. |
 | Arrows instead of lines | Off | Connectors end in an arrowhead pointing to the subtopic. |
 
-**Colors** are on their own page in the settings, for:
+**Themes** are on their own page in the settings. You start with one, **Custom**, which has the colors you set before themes existed and which maps made before then use. Add a theme starting from a built-in one or one of yours, reorder them, and rename or delete one from its page. Each theme has colors for:
 
 - the central topic: text, border and background
 - the topic text of main topics and subtopics
 - summaries: text, border and brace, background
 - boundaries: dashed line, background, title text, title background
 - relationships: line and arrowhead, label text
+- callouts: text, border and tail, background
 - branches: line and border, and main topic background. Main topics take the branch colors in turn. Branch colors can be added, removed and reordered, and **Reset colors to defaults** restores the original palette.
 
-Color and arrow changes apply to topics and connectors created afterwards. To apply them to an existing map, use **Reset all** from the panel's layout settings or the command palette.
+**Import and export** exports all your themes as JSON, to the clipboard or a file in the vault, and brings themes in from the clipboard or a file. A map whose theme was deleted, or comes from another vault, gets the Classic colors for new topics.
+
+Color and arrow changes apply to topics and connectors created afterwards. To apply them to an existing map, pick its theme again from the panel, or use **Reset all** from the panel's layout settings or the command palette.
+
+
 
 ## Development
 
