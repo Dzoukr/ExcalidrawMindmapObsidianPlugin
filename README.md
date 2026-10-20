@@ -13,11 +13,11 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | Tab / Insert | Add child |
 | Enter | Add sibling below |
 | Shift+Enter | Add sibling above |
-| Delete / Backspace | Delete the selected topics with their subtopics (the central topic deletes the whole map, if enabled in settings; a central topic with no other topics can always be deleted) |
+| Delete / Backspace | Delete the selected topics with their subtopics (the central topic deletes the whole map, if enabled in settings; a central topic with no other topics can always be deleted), or the selected boundary or callout |
 | Ctrl+C / Ctrl+X | Copy or cut the selected topics as a Markdown bullet list |
 | Ctrl+V | Paste a Markdown outline or text as subtopics of the selected topic |
 | Ctrl+D (Cmd+D on Mac) | Duplicate the selected topics with their subtopics (the central topic duplicates the whole map) |
-| F2 / Space | Edit text |
+| F2 / Space | Edit the text of the topic, or of the selected boundary's title or callout (Enter too for these two) |
 | Arrow keys | Move selection (right/left = child/parent, mirrored on the left side) |
 | Alt+Up / Alt+Down | Move the topic, or the selected boundary with its topics, up or down among its siblings. It stays in its boundaries and summaries, and moves past one it isn't in as a whole; drag it to take it in or out |
 | Alt+Left / Alt+Right | Promote or demote the topic (toward or away from the central topic, mirrored on the left side) |
@@ -47,7 +47,7 @@ New maps get the structure set in the settings. Maps made before version 1.2 are
 
 ### 🧩 Summaries, boundaries and relationships
 
-Select sibling topics to add a **summary**, a topic behind a brace that spans them; drag a topic above or below the brace to take it out, or next to the brace to add it. Or add a **boundary**, a dashed frame with a title around them; drag a topic out of the frame to take it out of the boundary, or drag a sibling in to add it. The frame and its title are grouped, so clicking either selects both and they move together; move them to move the topics along, even to the other side. To resize the frame alone, double-click into the group and select it: it then takes in exactly the topics inside it. A **relationship** is a curved, labeled arrow between any two topics or boundaries, even in different maps, and it stays attached when they move. Drag either end onto another topic or boundary to reconnect it.
+Select sibling topics to add a **summary**, a topic behind a brace that spans them; drag a topic above or below the brace to take it out, or next to the brace to add it. Or add a **boundary**, a dashed frame with a title around them; select it and press Space or Enter to edit its title, or Delete to remove it, leaving its topics. Drag a topic out of the frame to take it out of the boundary, or drag a sibling in to add it. The frame and its title are grouped, so clicking either selects both and they move together; move them to move the topics along, even to the other side. To resize the frame alone, double-click into the group and select it: it then takes in exactly the topics inside it. A **relationship** is a curved, labeled arrow between any two topics or boundaries, even in different maps, and it stays attached when they move. Drag either end onto another topic or boundary to reconnect it.
 
 ### 💬 Callouts
 
@@ -85,7 +85,7 @@ The panel comes in several styles, chosen in the settings: **Default** like Obsi
 
 ### ✏️ Still plain Excalidraw
 
-Maps are ordinary Excalidraw elements, so every Excalidraw tool still works on them. Every operation is a single undo step. Pause the plugin from the panel when you want Excalidraw's own shortcuts back.
+Maps are ordinary Excalidraw elements, so every Excalidraw tool still works on them. Every operation is a single undo step. Pause the plugin from the panel, or with the command "Pause or resume mind map editing", when you want Excalidraw's own shortcuts back.
 
 ## Configuration
 
@@ -116,15 +116,13 @@ All options are in **Settings → Excalidraw Mind Map**.
 
 Color and arrow changes apply to topics and connectors created afterwards. To apply them to an existing map, pick its theme again from the panel, or use **Reset all** from the panel's layout settings or the command palette.
 
-
-
 ## Development
 
 ```
 npm install
 npm run dev     # watch build, copies into test-vault/.obsidian/plugins/excalidraw-mindmap
 npm run build   # type-check + production build
-npm test        # layout unit tests
+npm test        # unit tests
 npm run lint    # ESLint with Obsidian's plugin rules
 ```
 
