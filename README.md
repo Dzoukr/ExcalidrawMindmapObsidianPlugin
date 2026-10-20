@@ -51,7 +51,7 @@ Select sibling topics to add a **summary**, a topic behind a brace that spans th
 
 ### 💬 Callouts
 
-A **callout** is a short note in a bubble right above a topic, pointing at it, like XMind's callout. Add one from the panel or with the command "Add callout to selected topic"; it opens for typing right away. Enter finishes it, Shift+Enter starts a new line. The bubble and its tail are grouped, so they are selected together; the callout moves with its topic and the map makes room for it. Select it and press Space or Enter to edit it, or Delete to remove it; a callout edited to no text is removed too. A topic has at most one callout (adding another edits the one it has), summaries have none, and it goes when its topic is deleted. Duplicating a topic copies its callout too.
+A **callout** is a short note in a solid-colored bubble right above a topic, with a tail pointing down at it, like XMind's callout. Add one from the panel or with the command "Add callout to selected topic"; it opens for typing right away. Enter finishes it, Shift+Enter starts a new line. The bubble and its tail are grouped, so they are selected together; the callout moves with its topic and the map makes room for it. Select it and press Space or Enter to edit it, or Delete to remove it; a callout edited to no text is removed too. A topic has at most one callout (adding another edits the one it has), summaries have none, and it goes when its topic is deleted. Duplicating a topic copies its callout too.
 
 ### 🪗 Collapse and expand
 
@@ -65,7 +65,7 @@ Or drag a topic onto another one to make it a subtopic there, in one move. The t
 
 ### 📝 Markdown outlines
 
-Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into a note. Ctrl+V pastes bullet lists, numbered lists or headings back as subtopics of the selected topic. A command builds a whole new map from the outline in the clipboard.
+Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into a note; callouts are left out. Ctrl+V pastes bullet lists, numbered lists or headings back as subtopics of the selected topic. A command builds a whole new map from the outline in the clipboard.
 
 ### 🔗 Links to notes
 
@@ -109,7 +109,7 @@ All options are in **Settings → Excalidraw Mind Map**.
 - summaries: text, border and brace, background
 - boundaries: dashed line, background, title text, title background
 - relationships: line and arrowhead, label text
-- callouts: text, border and tail, background
+- callouts: text, background and tail
 - branches: line and border, and main topic background. Main topics take the branch colors in turn. Branch colors can be added, removed and reordered, and **Reset colors to defaults** restores the original palette.
 
 **Import and export** exports all your themes as JSON, to the clipboard or a file in the vault, and brings themes in from the clipboard or a file. A map whose theme was deleted, or comes from another vault, gets the Classic colors for new topics.

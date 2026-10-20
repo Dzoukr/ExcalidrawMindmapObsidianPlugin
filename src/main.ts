@@ -1005,7 +1005,7 @@ class MindMapSettingTab extends PluginSettingTab {
         {
           type: "group",
           heading: "Callout",
-          items: [color("Text", "callout.text"), color("Border and tail", "callout.border"), color("Background", "callout.fill")],
+          items: [color("Text", "callout.text"), color("Background and tail", "callout.fill")],
         },
         this.branchList(t.colors),
         {

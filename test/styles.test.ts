@@ -40,3 +40,8 @@ test("a taken name gets a number", () => {
   assert.equal(uniqueName("Ocean", ["Sunset"]), "Ocean");
   assert.equal(uniqueName("Ocean", ["Ocean", "Ocean 2"]), "Ocean 3");
 });
+
+test("callout colors from before callouts lost their border take the new defaults", () => {
+  assert.deepEqual(mergeColors({ callout: { text: "#000000", border: "#f08c00", fill: "#fff3bf" } }).callout, DEFAULT_COLORS.callout);
+  assert.deepEqual(mergeColors({ callout: { text: "#000000", fill: "#123456" } }).callout, { text: "#000000", fill: "#123456" });
+});

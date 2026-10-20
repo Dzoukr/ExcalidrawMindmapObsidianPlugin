@@ -207,6 +207,7 @@ export function computeLayout(
   const decorations = new Map<string, Box[]>(); // summary or boundary id -> everything it draws
   const placeCallout = (n: LNode, box: Box) => {
     if (n.callout) callouts.set(n.id, calloutBox(box, size(n.callout)));
+
   };
   const rs = size(root.id);
   const rootBox = { x: rootCenter.x - rs.w / 2, y: rootCenter.y - rs.h / 2, w: rs.w, h: rs.h };
@@ -308,7 +309,7 @@ export function calloutBox(topic: Box, s: Size): Box {
 
 /**
  * Tail of a callout: a closed triangle from behind the bubble's bottom edge, where the bubble covers it,
- * down to the middle of its topic's top edge. Its position and points relative to it.
+ * straight down to the middle of its topic's top edge. Its position and points relative to it.
  */
 export function tailPoints(bubble: Box, topic: Box): { x: number; y: number; points: number[][] } {
   const half = Math.min(TAIL_HALF, bubble.w / 4);

@@ -440,7 +440,7 @@ function createCallout(ea: ExcalidrawAutomate, rootId: string, nodeId: string, t
   const id = ea.addText(topic.x, topic.y - 40, text, {
     box: true,
     boxPadding: CALLOUT_PADDING.padX,
-    boxStrokeColor: c.border,
+    boxStrokeColor: c.fill, // no border, like XMind's
     textAlign: "center",
     textVerticalAlign: "middle",
   });
@@ -462,7 +462,7 @@ function createTail(ea: ExcalidrawAutomate, rootId: string, calloutId: string, r
   const c = colors.callout;
   ea.clear();
   Object.assign(ea.style, {
-    strokeColor: c.border,
+    strokeColor: c.fill, // the bubble's color, so they make one shape
     backgroundColor: c.fill,
     fillStyle: "solid",
     strokeWidth: 1,
@@ -2071,14 +2071,21 @@ export async function addCallout(view: ExcalidrawView, nodeId: string) {
     }
     const existing = map.callouts.get(node.id);
     if (existing) return existing.el.id;
-    const colors = colorsIn(map);
-    const els = createCallout(ea, map.root.id, node.id, node.el, node.text?.fontFamily ?? 1, CALLOUT_TEXT, colors);
-    tx.add(createTail(ea, map.root.id, els[0].id, node.el.roughness, colors, els[0].groupIds!)); // behind the bubble
-    els.forEach((el) => tx.add(el));
+    const { bubble } = attachCallout(tx, ea, map.root.id, node.id, CALLOUT_TEXT, colorsIn(map));
     layoutMap(tx, ea, map.root.id);
-    return els[0].id;
+    return bubble.id;
   });
   if (id) await focusNode(view, id, true);
+}
+
+/** Adds a callout with the text to the topic, its tail behind its bubble; the layout places them. */
+function attachCallout(tx: SceneTx, ea: ExcalidrawAutomate, rootId: string, nodeId: string, text: string, colors: Colors) {
+  const topic = tx.get(nodeId)!;
+  const tid = boundTextId(topic);
+  const [bubble, label] = createCallout(ea, rootId, nodeId, topic, (tid && tx.get(tid)?.fontFamily) || 1, text, colors);
+  const tail = createTail(ea, rootId, bubble.id, topic.roughness, colors, bubble.groupIds!);
+  for (const el of [tail, bubble, label]) tx.add(el);
+  return { bubble, label, tail };
 }
 
 export async function editCallout(view: ExcalidrawView, calloutId: string) {
@@ -2400,13 +2407,10 @@ function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode
     if (tid && x.text) tx.patch(tid, lookOf(x.text, TEXT_LOOK));
     const c = map.callouts.get(x.id);
     if (c) {
-      const els = createCallout(ea, root, id, tx.get(id)!, c.text?.fontFamily ?? 1, calloutText(c), colors);
-      Object.assign(els[0], lookOf(c.el, LOOK));
-      if (c.text) Object.assign(els[1], lookOf(c.text, TEXT_LOOK));
-      const tail = createTail(ea, root, els[0].id, c.el.roughness, colors, els[0].groupIds!);
-
-      if (c.tail) Object.assign(tail, lookOf(c.tail, LOOK));
-      [tail, ...els].forEach((el) => tx.add(el));
+      const copy = attachCallout(tx, ea, root, id, calloutText(c), colors);
+      tx.patch(copy.bubble.id, lookOf(c.el, LOOK));
+      if (c.text) tx.patch(copy.label.id, lookOf(c.text, TEXT_LOOK));
+      if (c.tail) tx.patch(copy.tail.id, lookOf(c.tail, LOOK));
     }
   }
   for (const b of map.boundaries.values()) {
@@ -2489,7 +2493,7 @@ const outlineOf = (n: MMNode): OutlineItem => ({ text: topicText(n), children: o
 
 /**
  * The branches of the given topics as a Markdown bullet list, in map order, collapsed subtopics included.
- * A branch inside another one given is part of that one. Summaries and boundaries are left out.
+ * A branch inside another one given is part of that one. Summaries, boundaries and callouts are left out.
  */
 export function outlineMarkdown(view: ExcalidrawView, nodeIds: string[]): string | null {
   const els = view.excalidrawAPI?.getSceneElements() ?? [];
@@ -2498,12 +2502,13 @@ export function outlineMarkdown(view: ExcalidrawView, nodeIds: string[]): string
   const items: OutlineItem[] = [];
   for (const r of roots) {
     const map = buildMap(els, r);
+    if (!map) continue;
     const walk = (n: MMNode) => {
       if (ids.has(n.id)) return void items.push(outlineOf(n));
       ordered(n).forEach(walk);
       n.summaries.forEach((s) => walk(s.node));
     };
-    if (map) walk(map.root);
+    walk(map.root);
   }
   return items.length ? toMarkdown(items) : null;
 }
@@ -2557,6 +2562,7 @@ export async function newMapFromOutline(view: ExcalidrawView, md: string): Promi
   if (!items.length) return false;
   const single = items.length === 1;
   const id = run(view, (tx, ea) => createMap(tx, ea, single ? items[0].text : undefined, single ? items[0].children : items));
+
   if (id) await focusNode(view, id, false);
   return true;
 }
@@ -2742,8 +2748,9 @@ function restyleMap(tx: SceneTx, map: MindMap, colors: Colors, full: boolean) {
   const c = colors.callout;
   for (const x of map.callouts.values()) {
     const shape = lines({ fillStyle: "solid", strokeWidth: 1, strokeStyle: "solid" });
-    patchChanged(tx, x.el, { strokeColor: c.border, backgroundColor: c.fill, ...shape });
-    patchChanged(tx, x.tail, { strokeColor: c.border, backgroundColor: c.fill, ...shape });
+    patchChanged(tx, x.el, { strokeColor: c.fill, backgroundColor: c.fill, ...shape });
+    patchChanged(tx, x.tail, { strokeColor: c.fill, backgroundColor: c.fill, ...shape });
+
     patchChanged(tx, x.text, { strokeColor: c.text, ...lines({ fontSize: CALLOUT_FONT_SIZE }) });
   }
 }

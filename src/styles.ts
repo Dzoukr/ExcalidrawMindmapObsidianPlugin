@@ -21,7 +21,7 @@ export interface Colors {
   summary: { text: string; border: string; fill: string }; // border also colors the brace
   boundary: { line: string; fill: string; title: string; titleFill: string };
   relationship: { line: string; text: string }; // line and arrowhead, label text
-  callout: { text: string; border: string; fill: string }; // border also colors the pointer
+  callout: { text: string; fill: string }; // a bubble without a border; the fill also colors its tail
   branches: Branch[]; // cycled through for the main topics of a map
 }
 
@@ -31,7 +31,7 @@ export const DEFAULT_COLORS: Colors = {
   summary: { text: "#1e1e1e", border: "#1e1e1e", fill: "#ffffff" },
   boundary: { line: "#868e96", fill: "#e9ecef", title: "#1e1e1e", titleFill: "#adb5bd" },
   relationship: { line: "#495057", text: "#495057" },
-  callout: { text: "#1e1e1e", border: "#f08c00", fill: "#fff3bf" },
+  callout: { text: "#ffffff", fill: "#e8590c" },
   branches: [
     { stroke: "#e03131", fill: "#ffc9c9" },
     { stroke: "#1971c2", fill: "#a5d8ff" },
@@ -77,7 +77,7 @@ const PALETTES: Record<Preset, Colors> = {
     summary: { text: "#343a40", border: "#adb5bd", fill: "#f8f9fa" },
     boundary: { line: "#ced4da", fill: "#f8f9fa", title: "#495057", titleFill: "#e9ecef" },
     relationship: { line: "#868e96", text: "#868e96" },
-    callout: { text: "#495057", border: "#ffc078", fill: "#fff4e6" },
+    callout: { text: "#ffffff", fill: "#9775fa" },
     branches: [
       { stroke: "#ff8787", fill: "#fff5f5" },
       { stroke: "#74c0fc", fill: "#e7f5ff" },
@@ -93,7 +93,7 @@ const PALETTES: Record<Preset, Colors> = {
     summary: { text: "#102a43", border: "#1864ab", fill: "#e7f5ff" },
     boundary: { line: "#74c0fc", fill: "#e7f5ff", title: "#102a43", titleFill: "#a5d8ff" },
     relationship: { line: "#1864ab", text: "#1864ab" },
-    callout: { text: "#102a43", border: "#1971c2", fill: "#d0ebff" },
+    callout: { text: "#ffffff", fill: "#1864ab" },
     branches: [
       { stroke: "#1864ab", fill: "#d0ebff" },
       { stroke: "#0b7285", fill: "#c5f6fa" },
@@ -109,7 +109,7 @@ const PALETTES: Record<Preset, Colors> = {
     summary: { text: "#3b1f1f", border: "#d9480f", fill: "#fff4e6" },
     boundary: { line: "#ffa94d", fill: "#fff4e6", title: "#3b1f1f", titleFill: "#ffd8a8" },
     relationship: { line: "#a61e4d", text: "#a61e4d" },
-    callout: { text: "#3b1f1f", border: "#e8590c", fill: "#ffe8cc" },
+    callout: { text: "#ffffff", fill: "#c2255c" },
     branches: [
       { stroke: "#e8590c", fill: "#ffe8cc" },
       { stroke: "#c2255c", fill: "#ffdeeb" },
@@ -125,7 +125,7 @@ const PALETTES: Record<Preset, Colors> = {
     summary: { text: "#1b2e1f", border: "#5c940d", fill: "#f4fce3" },
     boundary: { line: "#8ce99a", fill: "#ebfbee", title: "#1b2e1f", titleFill: "#b2f2bb" },
     relationship: { line: "#5c940d", text: "#5c940d" },
-    callout: { text: "#1b2e1f", border: "#e67700", fill: "#fff9db" },
+    callout: { text: "#ffffff", fill: "#2b8a3e" },
     branches: [
       { stroke: "#2b8a3e", fill: "#d3f9d8" },
       { stroke: "#5c940d", fill: "#e9fac8" },
@@ -141,7 +141,7 @@ const PALETTES: Record<Preset, Colors> = {
     summary: { text: "#212529", border: "#495057", fill: "#ffffff" },
     boundary: { line: "#adb5bd", fill: "#f8f9fa", title: "#212529", titleFill: "#dee2e6" },
     relationship: { line: "#495057", text: "#495057" },
-    callout: { text: "#212529", border: "#495057", fill: "#f1f3f5" },
+    callout: { text: "#ffffff", fill: "#343a40" },
     branches: [
       { stroke: "#343a40", fill: "#dee2e6" },
       { stroke: "#495057", fill: "#e9ecef" },
@@ -216,7 +216,8 @@ export function mergeColors(value: unknown): Colors {
     summary: group(c.summary, DEFAULT_COLORS.summary),
     boundary: group(c.boundary, DEFAULT_COLORS.boundary),
     relationship: group(relationship, DEFAULT_COLORS.relationship),
-    callout: group(c.callout, DEFAULT_COLORS.callout),
+    // Callouts with a border were pale bubbles, unreadable without it: they get the new colors.
+    callout: group((c.callout as { border?: unknown } | undefined)?.border ? {} : c.callout, DEFAULT_COLORS.callout),
     branches: branches.length ? branches : structuredClone(defaults),
   };
 }

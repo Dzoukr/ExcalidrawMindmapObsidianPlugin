@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LNode, PlacedInfo } from "../src/layout.ts";
 import {
-  BOUNDARY_PAD, BRACE_GAP, BRACE_W, CALLOUT_GAP, RELATION_GAP, ROOT_H_GAP, TAIL_INSET, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, V_GAP_L1, computeLayout, dropsOnto,
+  BOUNDARY_PAD, BRACE_GAP, BRACE_W, CALLOUT_GAP, RELATION_GAP, ROOT_H_GAP, TAIL_HALF, TAIL_INSET, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, V_GAP_L1, computeLayout, dropsOnto,
   findFreeSpot, relationBend, relationPoints, tailPoints, updateOffsets,
 } from "../src/layout.ts";
 
@@ -228,4 +228,11 @@ test("a callout's tail grows from behind its bubble down to the middle of its to
   const [first, , tip, last] = t.points;
   assert.deepEqual(first, last); // closed, so it is filled
   assert.deepEqual({ x: t.x + tip[0], y: t.y + tip[1] }, { x: 50, y: -2 });
+});
+
+test("a callout's tail runs straight down to the topic", () => {
+  const bubble = { x: 30, y: -60, w: 100, h: 30 };
+  const t = tailPoints(bubble, { x: 0, y: 0, w: 100, h: 40 });
+  assert.equal(t.x + TAIL_HALF, 50); // its base is centered over the tip, at the topic's middle
+  assert.deepEqual(t.points[2], [50 - t.x, -2 - t.y]);
 });

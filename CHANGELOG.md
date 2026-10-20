@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 ### New
 
 - **Duplicate (Ctrl+D, Cmd+D on Mac)** copies the selected topics with everything under them, right below the original: subtopics, summaries, boundaries, colors and collapsed topics. The copy joins the boundaries and summaries the original is in. On the central topic, it duplicates the whole map next to it. Relationships stay with the original. Also in the panel and the command palette.
 - **Control panel position.** Dock the panel as a row at the bottom or top of the drawing, or as a column on its left or right side, in the settings. Its menus open toward the drawing.
-- **Callouts.** Add a short note in a bubble right above a topic, pointing at it, like XMind's callout: from the panel or with the command "Add callout to selected topic". Its bubble and tail are grouped; it moves with its topic and the map makes room for it. Select it and press Space or Enter to edit it, or Delete to remove it; a callout edited to no text is removed too. Duplicating a topic copies its callout.
+- **Callouts.** Add a short note in a solid-colored bubble right above a topic, pointing down at it, like XMind's callout: from the panel or with the command "Add callout to selected topic". Its bubble and tail are grouped; it moves with its topic and the map makes room for it. Select it and press Space or Enter to edit it, or Delete to remove it; a callout edited to no text is removed too. Duplicating a topic copies its callout.
 - **Themes.** Each map has its own theme: Classic, Pastel, Ocean, Sunset, Forest, Monochrome, or one of your own. Pick it from the panel's new **Theme** button or with the command "Change theme of the mind map"; the map is recolored at once and keeps its layout. New maps get the theme set in the settings.
 - **Your own themes.** The **Colors** settings page is now **Themes**: add themes starting from any theme, reorder them, and rename, delete or set the colors of each on its page. Your earlier colors become the **Custom** theme, which existing maps keep.
 - **Import and export themes** as JSON: copy all your themes to the clipboard or save them as a file in the vault, and import them from the clipboard or a file.
