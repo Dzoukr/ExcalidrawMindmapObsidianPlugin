@@ -31,11 +31,15 @@ export interface NodeData {
   theme?: string; // central topic only: the colors of the map, custom (from the settings) when not set
   summary?: string[]; // summary topic: ids of the siblings it spans, the range runs from the first to the last still present
   folded?: boolean; // subtopics, summaries and boundaries are hidden
+  highlight?: PlainLook; // highlighted: the look the topic has without it, to go back to when it is turned off
   ox?: number; // manual offset
   oy?: number;
   lx?: number; // last position placed by layout
   ly?: number;
 }
+
+/** What a highlight changes on a topic: its fill, text color and border width. */
+export interface PlainLook { backgroundColor: string; textColor: string; strokeWidth: number; }
 
 export interface EdgeData {
   edge: true;

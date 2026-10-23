@@ -1,6 +1,6 @@
 {
   "name": "excalidraw-mindmap",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "XMind-style mind map editing inside Excalidraw drawings in Obsidian",
   "main": "main.js",
   "private": true,

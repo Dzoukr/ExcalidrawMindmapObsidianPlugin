@@ -5,7 +5,7 @@ import {
   tailPoints, updateOffsets,
 } from "./layout";
 import {
-  HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMCallout, MMNode, MMSummary, MindMap, NodeData, RelationData, Structure, badgeData, balancedSplit, byOrder,
+  HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMCallout, MMNode, MMSummary, MindMap, NodeData, PlainLook, RelationData, Structure, badgeData, balancedSplit, byOrder,
   boundTextId, boundaryData, braceData, buildMap, calloutData, edgeData, hiddenState, isHidden, isRelationLabel, nodeData, orderLine, rangesIn, relationData,
   resolveNodeElement, rootIdOf, structureIn, structureOf, subtree, tailData, titleData, twoSided,
 } from "./model";
@@ -13,7 +13,7 @@ import { OutlineItem, parseOutline, toMarkdown } from "./outline";
 import {
   BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, CALLOUT_FONT_SIZE, CALLOUT_PADDING, CALLOUT_TEXT, Colors, DEFAULT_TEXT, MIN_TEXT_WIDTH,
   NodeStyle, SUMMARY_PADDING, SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, Theme, branchColor, colorsOf, connectorArrowhead, newMapDefaults, paddingFor,
-  styleFor, summaryStyle, themeIn,
+  highlightStyle, styleFor, summaryStyle, themeIn,
 } from "./styles";
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -1648,6 +1648,7 @@ function run<T>(view: ExcalidrawView, fn: (tx: SceneTx, ea: ExcalidrawAutomate) 
   try {
     const tx = new SceneTx(view);
     const result = fn(tx, ea);
+    syncHalos(tx, ea);
     tx.commit();
     return result;
   } finally {
@@ -1663,7 +1664,8 @@ function mapOf(tx: SceneTx, id: string): { map: MindMap; node: MMNode } | null {
   return map && node ? { map, node } : null;
 }
 
-const branchOf = (n: MMNode): Branch => ({ stroke: n.el.strokeColor, fill: n.el.backgroundColor });
+/** The branch colors of the topic; a highlighted one has its fill under the highlight. */
+const branchOf = (n: MMNode): Branch => ({ stroke: n.el.strokeColor, fill: n.data.highlight?.backgroundColor ?? n.el.backgroundColor });
 
 // ---------- operations ----------
 
@@ -2152,6 +2154,106 @@ export function followCallouts(view: ExcalidrawView) {
   tx.commit("NEVER");
 }
 
+// ---------- highlight ----------
+
+const plainLook = (st: PlainLook): PlainLook => ({ backgroundColor: st.backgroundColor, textColor: st.textColor, strokeWidth: st.strokeWidth });
+
+/** Marks the topic highlighted, with the look to go back to, or not highlighted. */
+function setHighlight(tx: SceneTx, id: string, look: PlainLook | null) {
+  const el = tx.get(id)!;
+  const { highlight: _, ...rest } = nodeData(el)!;
+  patchChanged(tx, el, { customData: { ...el.customData, [KEY]: look ? { ...rest, highlight: look } : rest } });
+}
+
+/** Whether any of the topics can be highlighted, and whether all those that can are. Central topics can't. */
+export function highlightState(view: ExcalidrawView, nodeIds: string[]): { highlightable: boolean; highlighted: boolean } {
+  const els = view.excalidrawAPI?.getSceneElements() ?? [];
+  const ds = nodeIds.map((id) => nodeData(els.find((e) => e.id === id))).filter((d): d is NodeData => !!d && d.parent !== null);
+  return { highlightable: ds.length > 0, highlighted: ds.length > 0 && ds.every((d) => !!d.highlight) };
+}
+
+/**
+ * Highlights the topics in their theme's highlight colors, with a thicker border and a halo, or turns it off when
+ * all of them have it. Central topics are left out. The highlight stays through theme changes, resets, level
+ * changes and copies.
+ */
+export function toggleHighlight(view: ExcalidrawView, nodeIds: string[]) {
+  run(view, (tx) => {
+    const found = nodeIds.map((id) => mapOf(tx, id)).filter((f): f is { map: MindMap; node: MMNode } => !!f?.node.parent);
+    const on = found.some((f) => !f.node.data.highlight);
+    for (const { map, node: n } of found) {
+      if (on === !!n.data.highlight) continue;
+      const colors = colorsIn(map);
+      const plain = n.data.highlight ?? { backgroundColor: n.el.backgroundColor, textColor: n.text?.strokeColor ?? colors.topicText, strokeWidth: n.el.strokeWidth ?? 1 };
+      setHighlight(tx, n.id, on ? plain : null);
+      const look = on ? highlightStyle(plain, colors) : plain;
+      tx.patch(n.id, { backgroundColor: look.backgroundColor, fillStyle: "solid", strokeWidth: look.strokeWidth });
+      if (n.text) tx.patch(n.text.id, { strokeColor: look.textColor });
+    }
+  });
+}
+
+// A halo is a faint glow in the highlight color behind a highlighted topic. Halos aren't part of the map: they are
+// made from the topics, and kept in step with them after every operation and whenever Excalidraw moves them itself.
+const HALO_KEY = "mindmapHalo";
+const HALO_PAD = 8;
+const HALO_OPACITY = 25;
+
+/**
+ * Gives every highlighted topic its halo, where the topic is and in its theme's color, hidden with the topic when it
+ * is collapsed, and removes the halos whose topic is gone or no longer highlighted. Halos are locked, so they can't
+ * be selected.
+ */
+function syncHalos(tx: SceneTx, ea: ExcalidrawAutomate) {
+  const live = tx.live();
+  const halos = new Map<string, El>(); // topic id -> its halo
+  for (const el of live) {
+    const d = el.customData?.[HALO_KEY] as { node: string } | undefined;
+    if (!d) continue;
+    if (halos.has(d.node)) tx.delete(el.id);
+    else halos.set(d.node, el);
+  }
+  for (const topic of live) {
+    const d = nodeData(topic);
+    if (!d?.highlight) continue;
+    const halo = halos.get(topic.id);
+    halos.delete(topic.id);
+    const box = { x: topic.x - HALO_PAD, y: topic.y - HALO_PAD, width: topic.width + 2 * HALO_PAD, height: topic.height + 2 * HALO_PAD };
+    const color = colorsOf(themeIn(nodeData(tx.get(d.root)))).highlight.fill;
+    const opacity = topic.customData?.[HIDDEN_KEY] ? 0 : HALO_OPACITY;
+    if (halo) {
+      patchChanged(tx, halo, { ...box, strokeColor: color, backgroundColor: color, opacity });
+      continue;
+    }
+    ea.clear();
+    Object.assign(ea.style, {
+      strokeColor: color, backgroundColor: color, fillStyle: "solid", strokeWidth: 1, strokeStyle: "solid",
+      roughness: 0, roundness: { type: 3 }, opacity, angle: 0,
+    });
+    const el = ea.getElement(ea.addRect(box.x, box.y, box.width, box.height));
+    el.locked = true;
+    el.customData = { [HALO_KEY]: { node: topic.id } };
+    ea.clear();
+    tx.addBehind(el, topic.id);
+  }
+  for (const h of halos.values()) tx.delete(h.id);
+}
+
+/** Keeps halos with their topics when Excalidraw moves the topics itself, while dragging or on undo. Not an undo step of its own. */
+export function followHalos(view: ExcalidrawView) {
+  const api = view.excalidrawAPI;
+  if (!api?.getSceneElements().some((e) => nodeData(e)?.highlight || e.customData?.[HALO_KEY])) return;
+  const ea = getEA(view);
+  if (!ea) return;
+  try {
+    const tx = new SceneTx(view);
+    syncHalos(tx, ea);
+    tx.commit("NEVER");
+  } finally {
+    ea.destroy?.();
+  }
+}
+
 export function navigate(view: ExcalidrawView, nodeId: string, dir: Direction) {
   const api = view.excalidrawAPI;
   if (!api) return;
@@ -2288,9 +2390,11 @@ function reparent(tx: SceneTx, node: MMNode, parent: MMNode, order: number, side
 function restyle(tx: SceneTx, map: MindMap, node: MMNode, depth: number, branch: Branch, colors: Colors) {
   const level = (d: number) => Math.min(d, 2);
   const look = (x: MMNode, d: number) => {
-    const st = styleFor(d, branch, colors);
+    const plain = styleFor(d, branch, colors);
+    const st = x.data.highlight ? highlightStyle(plain, colors) : plain;
     tx.patch(x.id, { strokeColor: st.borderColor, backgroundColor: st.backgroundColor, strokeWidth: st.strokeWidth });
     if (x.text) tx.patch(x.text.id, { fontSize: st.fontSize, strokeColor: st.textColor });
+    if (x.data.highlight) setHighlight(tx, x.id, plainLook(plain));
   };
   look(node, depth);
   for (const x of subtree(node)) {
@@ -2714,7 +2818,10 @@ function restyleMap(tx: SceneTx, map: MindMap, colors: Colors, full: boolean) {
   [...map.root.children].sort(byOrder).forEach((c, i) => branches.set(c.id, branchColor(i, colors)));
   const visit = (n: MMNode, branch: Branch) => {
     const st = n.depth === 0 ? styleFor(0, branch, colors) : n.covers ? summaryStyle(colors) : styleFor(n.depth, branch, colors);
-    applyNodeStyle(tx, n, st, full);
+    const h = n.data.highlight;
+    applyNodeStyle(tx, n, h ? highlightStyle(st, colors) : st, full);
+    // Only restyled in full does a highlighted topic get the border width of its level back when turned off.
+    if (h) setHighlight(tx, n.id, { ...plainLook(st), ...(full ? {} : { strokeWidth: h.strokeWidth }) });
     for (const c of n.children) visit(c, branches.get(c.id) ?? branch);
     // A summary's subtopics take the branch of the topics it spans.
     for (const s of n.summaries) visit(s.node, branches.get(s.covers[0]) ?? branch);

@@ -1,7 +1,7 @@
 {
   "id": "excalidraw-mindmap",
   "name": "Excalidraw Mind Map",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "minAppVersion": "1.13.0",
   "description": "Edit XMind-style mind maps inside Excalidraw drawings with keyboard shortcuts.",
   "author": "Roman Provazník",

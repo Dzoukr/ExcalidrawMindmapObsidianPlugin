@@ -1,6 +1,6 @@
 // Default node styles per depth. Applied when a node is created, layout never restyles existing nodes.
 
-import type { NodeData, Structure } from "./model";
+import type { NodeData, PlainLook, Structure } from "./model";
 
 export interface Branch { stroke: string; fill: string; }
 
@@ -22,6 +22,7 @@ export interface Colors {
   boundary: { line: string; fill: string; title: string; titleFill: string };
   relationship: { line: string; text: string }; // line and arrowhead, label text
   callout: { text: string; fill: string }; // a bubble without a border; the fill also colors its tail
+  highlight: { text: string; fill: string }; // a highlighted topic, its border thicker and still in its branch color; the fill also colors its halo
   branches: Branch[]; // cycled through for the main topics of a map
 }
 
@@ -32,6 +33,7 @@ export const DEFAULT_COLORS: Colors = {
   boundary: { line: "#868e96", fill: "#e9ecef", title: "#1e1e1e", titleFill: "#adb5bd" },
   relationship: { line: "#495057", text: "#495057" },
   callout: { text: "#ffffff", fill: "#e8590c" },
+  highlight: { text: "#1e1e1e", fill: "#ffd43b" },
   branches: [
     { stroke: "#e03131", fill: "#ffc9c9" },
     { stroke: "#1971c2", fill: "#a5d8ff" },
@@ -78,6 +80,7 @@ const PALETTES: Record<Preset, Colors> = {
     boundary: { line: "#ced4da", fill: "#f8f9fa", title: "#495057", titleFill: "#e9ecef" },
     relationship: { line: "#868e96", text: "#868e96" },
     callout: { text: "#ffffff", fill: "#9775fa" },
+    highlight: { text: "#343a40", fill: "#ffe066" },
     branches: [
       { stroke: "#ff8787", fill: "#fff5f5" },
       { stroke: "#74c0fc", fill: "#e7f5ff" },
@@ -94,6 +97,7 @@ const PALETTES: Record<Preset, Colors> = {
     boundary: { line: "#74c0fc", fill: "#e7f5ff", title: "#102a43", titleFill: "#a5d8ff" },
     relationship: { line: "#1864ab", text: "#1864ab" },
     callout: { text: "#ffffff", fill: "#1864ab" },
+    highlight: { text: "#102a43", fill: "#ffd43b" },
     branches: [
       { stroke: "#1864ab", fill: "#d0ebff" },
       { stroke: "#0b7285", fill: "#c5f6fa" },
@@ -110,6 +114,7 @@ const PALETTES: Record<Preset, Colors> = {
     boundary: { line: "#ffa94d", fill: "#fff4e6", title: "#3b1f1f", titleFill: "#ffd8a8" },
     relationship: { line: "#a61e4d", text: "#a61e4d" },
     callout: { text: "#ffffff", fill: "#c2255c" },
+    highlight: { text: "#3b1f1f", fill: "#ffd43b" },
     branches: [
       { stroke: "#e8590c", fill: "#ffe8cc" },
       { stroke: "#c2255c", fill: "#ffdeeb" },
@@ -126,6 +131,7 @@ const PALETTES: Record<Preset, Colors> = {
     boundary: { line: "#8ce99a", fill: "#ebfbee", title: "#1b2e1f", titleFill: "#b2f2bb" },
     relationship: { line: "#5c940d", text: "#5c940d" },
     callout: { text: "#ffffff", fill: "#2b8a3e" },
+    highlight: { text: "#1b2e1f", fill: "#ffd43b" },
     branches: [
       { stroke: "#2b8a3e", fill: "#d3f9d8" },
       { stroke: "#5c940d", fill: "#e9fac8" },
@@ -142,6 +148,7 @@ const PALETTES: Record<Preset, Colors> = {
     boundary: { line: "#adb5bd", fill: "#f8f9fa", title: "#212529", titleFill: "#dee2e6" },
     relationship: { line: "#495057", text: "#495057" },
     callout: { text: "#ffffff", fill: "#343a40" },
+    highlight: { text: "#ffffff", fill: "#212529" },
     branches: [
       { stroke: "#343a40", fill: "#dee2e6" },
       { stroke: "#495057", fill: "#e9ecef" },
@@ -218,6 +225,7 @@ export function mergeColors(value: unknown): Colors {
     relationship: group(relationship, DEFAULT_COLORS.relationship),
     // Callouts with a border were pale bubbles, unreadable without it: they get the new colors.
     callout: group((c.callout as { border?: unknown } | undefined)?.border ? {} : c.callout, DEFAULT_COLORS.callout),
+    highlight: group(c.highlight, DEFAULT_COLORS.highlight),
     branches: branches.length ? branches : structuredClone(defaults),
   };
 }
@@ -304,6 +312,13 @@ export const CALLOUT_FONT_SIZE = 14;
 export const BADGE_PADDING = { padX: 5, padY: 2 };
 export const BADGE_FONT_SIZE = 12;
 export const BADGE_GAP = 6; // folded topic to its badge
+
+/** How much thicker the border of a highlighted topic is. */
+export const HIGHLIGHT_WIDTH = 2;
+
+/** The look of a topic, highlighted: the theme's highlight fill and text, the border thicker and of the same color. */
+export const highlightStyle = <T extends PlainLook>(st: T, c: Colors): T =>
+  ({ ...st, textColor: c.highlight.text, backgroundColor: c.highlight.fill, strokeWidth: st.strokeWidth + HIGHLIGHT_WIDTH });
 
 /** Summary topics use their own colors, whatever the branch. */
 export function summaryStyle(c: Colors): NodeStyle {

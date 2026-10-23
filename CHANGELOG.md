@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0
+
+### New
+
+- **Highlight.** Make topics stand out in the theme's highlight colors, with a thicker border and a soft halo around them: from the panel or with the command "Highlight selected topics, or turn their highlight off". The highlight stays through theme changes, Reset all, promote and demote, and Duplicate. Every theme has highlight colors, set on its page in the settings.
+
 ## 1.4.0
 
 ### New

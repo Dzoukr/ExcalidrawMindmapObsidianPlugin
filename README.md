@@ -53,6 +53,10 @@ Select sibling topics to add a **summary**, a topic behind a brace that spans th
 
 A **callout** is a short note in a solid-colored bubble right above a topic, with a tail pointing down at it, like XMind's callout. Add one from the panel or with the command "Add callout to selected topic"; it opens for typing right away. Enter finishes it, Shift+Enter starts a new line. The bubble and its tail are grouped, so they are selected together; the callout moves with its topic and the map makes room for it. Select it and press Space or Enter to edit it, or Delete to remove it; a callout edited to no text is removed too. A topic has at most one callout (adding another edits the one it has), summaries have none, and it goes when its topic is deleted. Duplicating a topic copies its callout too.
 
+### 🖍️ Highlight
+
+**Highlight** makes topics stand out, like a highlighter pen: they get the theme's highlight background and text color, a thicker border in their branch color, and a soft halo around them. Select one or more topics and click **Highlight** in the panel, or run the command "Highlight selected topics, or turn their highlight off"; again turns it off. The central topic can't be highlighted. A highlight stays when the map gets another theme or is reset, when its topic moves to another level, and on copies made with Duplicate.
+
 ### 🪗 Collapse and expand
 
 Ctrl+/ collapses a topic with everything below it. A badge shows how many topics are hidden, and clicking it expands the topic again. On the central topic, it collapses or expands all main topics at once.
@@ -79,7 +83,7 @@ Make your own themes on the **Themes** page of the settings: add one starting fr
 
 ### 📱 Works on mobile
 
-A floating panel offers every action. On phones and tablets it keeps the buttons that add, edit and delete topics, summaries, boundaries and relationships, and puts the rest, callouts and themes among them, in its **⋯** menu so it fits the screen. You can build maps without a keyboard.
+A floating panel offers every action. On phones and tablets it keeps the buttons that add, edit and delete topics, summaries, boundaries and relationships, and puts the rest, callouts, highlights and themes among them, in its **⋯** menu so it fits the screen. You can build maps without a keyboard.
 
 The panel comes in several styles, chosen in the settings: **Default** like Obsidian's own toolbars, **Accent color**, **High contrast** (dark in a light theme, light in a dark one), **Translucent** over the drawing, or **Colorful icons**.
 
@@ -110,6 +114,7 @@ All options are in **Settings → Excalidraw Mind Map**.
 - boundaries: dashed line, background, title text, title background
 - relationships: line and arrowhead, label text
 - callouts: text, background and tail
+- highlighted topics: text, background and halo
 - branches: line and border, and main topic background. Main topics take the branch colors in turn. Branch colors can be added, removed and reordered, and **Reset colors to defaults** restores the original palette.
 
 **Import and export** exports all your themes as JSON, to the clipboard or a file in the vault, and brings themes in from the clipboard or a file. A map whose theme was deleted, or comes from another vault, gets the Classic colors for new topics.

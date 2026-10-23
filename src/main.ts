@@ -4,10 +4,10 @@ import {
 } from "obsidian";
 import {
   Direction, addBoundary, addCallout, afterDrag, addChild, addRelationship, canAddCallout, followCallouts, followRelations, addSibling, addSummary, areSiblingTopics,
-  changeLevel, commitEditing, deleteBoundary, deleteCallout, deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, editCallout, editNode,
+  changeLevel, commitEditing, deleteBoundary, deleteCallout, deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, followHalos, highlightState, editCallout, editNode,
   editingCallout, editingNode, editingTitle, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
   relayout, resetAll, resetLayout, selectedBadge, selectedBoundary, selectedCallout, selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, setTheme,
-  layoutOf, toggleAutoAlign, toggleFold, topicState, unfold,
+  layoutOf, toggleAutoAlign, toggleFold, toggleHighlight, topicState, unfold,
 } from "./actions";
 import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { STRUCTURES, Structure, calloutData, isStructure, nodeData, titleData } from "./model";
@@ -175,6 +175,11 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => addCallout(v, id))),
     });
     this.addCommand({
+      id: "toggle-highlight",
+      name: "Highlight selected topics, or turn their highlight off",
+      checkCallback: (checking) => this.withActiveView(checking, (v) => this.highlight(v)),
+    });
+    this.addCommand({
       id: "toggle-fold",
       name: "Collapse or expand selected topic",
       checkCallback: (checking) => this.withActiveView(checking, (v) => this.runOnNode(v, (id) => toggleFold(v, id))),
@@ -339,6 +344,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
         if (!this.paused && !s.api.getAppState().editingTextElement) {
           followRelations(s.view);
           followCallouts(s.view);
+          followHalos(s.view);
         }
         this.showDropTarget(s);
         this.refreshPanel(s);
@@ -408,6 +414,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       boundary: !editing && !!selectedBoundary(s.view),
       callout: !editing && !!selectedCallout(s.view),
       calloutable: !!node && canAddCallout(s.view, node.id),
+      ...highlightState(s.view, editing ? [editing.id] : selectedTopics(s.view).map((n) => n.id)),
       ...t,
       canDeleteRoot: this.settings.allowDeleteCentralTopic || (!!node && isLoneCentral(s.view, node.id)),
       paused: this.paused,
@@ -465,6 +472,14 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const ids = selectedTopics(view).map((n) => n.id);
     if (!ids.length) return void new Notice("Select one or more topics to duplicate.");
     void duplicateNodes(view, ids);
+  }
+
+  /** Highlights the selected topics, or the topic being edited, or turns their highlight off. */
+  private highlight(view: ExcalidrawView) {
+    if (editingNode(view)) return this.runOnNode(view, (id) => toggleHighlight(view, [id]));
+    const ids = selectedTopics(view).map((n) => n.id);
+    if (!highlightState(view, ids).highlightable) return void new Notice("Select one or more topics, other than a central one, to highlight.");
+    toggleHighlight(view, ids);
   }
 
   /** Puts a boundary around the selected topics, or the topic being edited. */
@@ -579,6 +594,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       addBoundary: () => this.bound(view),
       addRelationship: () => this.relate(view),
       addCallout: on((id) => addCallout(view, id)),
+      toggleHighlight: () => this.highlight(view),
       edit: () => void this.edit(view),
       remove: () => void this.remove(view),
       toggleFold: () => this.runOnNode(view, (id) => toggleFold(view, id)),
@@ -1006,6 +1022,11 @@ class MindMapSettingTab extends PluginSettingTab {
           type: "group",
           heading: "Callout",
           items: [color("Text", "callout.text"), color("Background and tail", "callout.fill")],
+        },
+        {
+          type: "group",
+          heading: "Highlight",
+          items: [color("Text", "highlight.text"), color("Background and halo", "highlight.fill")],
         },
         this.branchList(t.colors),
         {

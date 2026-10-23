@@ -10,6 +10,7 @@ export interface PanelActions {
   addBoundary: () => void;
   addRelationship: () => void;
   addCallout: () => void;
+  toggleHighlight: () => void;
   edit: () => void;
   remove: () => void;
   toggleFold: () => void;
@@ -36,6 +37,8 @@ export interface PanelState {
   boundary: boolean; // a boundary (frame or title) is selected instead of a node
   callout: boolean; // a callout is selected instead of a node
   calloutable: boolean; // the selected node can get a callout, or has one to edit
+  highlightable: boolean; // a selected topic, other than a central one, can be highlighted
+  highlighted: boolean; // all the selected topics that can be highlighted are
   foldable: boolean; // that node can be collapsed or expanded
   collapsed: boolean; // that node is collapsed
   promote: boolean; // that node can be promoted to its parent's level
@@ -77,7 +80,7 @@ export function themeTitle(t: Theme): DocumentFragment {
 }
 
 type Key =
-  | "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "callout" | "edit" | "remove"
+  | "newMap" | "child" | "sibling" | "summary" | "boundary" | "relation" | "callout" | "highlight" | "edit" | "remove"
   | "copy" | "paste" | "duplicate" | "promote" | "demote" | "fold" | "layout" | "theme" | "pause" | "more";
 
 /**
@@ -115,6 +118,7 @@ export class FloatingPanel {
     button(g2, "boundary", "square-dashed", "Add boundary around the selected topics", a.addBoundary);
     button(g2, "relation", "spline", "Add relationship from the first to the second selected topic or boundary", a.addRelationship);
     if (!compact) button(g2, "callout", "message-square", "Add callout, a note above the topic", a.addCallout);
+    if (!compact) button(g2, "highlight", "highlighter", "Highlight", a.toggleHighlight);
     button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
     button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
     if (compact) {
@@ -184,6 +188,7 @@ export class FloatingPanel {
     item(s?.node ? "Paste Markdown as subtopics" : "Paste Markdown as a new map", "clipboard-paste", true, a.paste);
     item("Duplicate with subtopics", "copy-plus", !!s && (s.topics || s.node) && !s.summary, a.duplicate);
     item("Add callout", "message-square", !!s?.calloutable, a.addCallout);
+    item(s?.highlighted ? "Remove highlight" : "Highlight", "highlighter", !!s?.highlightable, a.toggleHighlight);
     menu.addSeparator();
     item("Promote to the parent's level", "indent-decrease", !!s?.promote, a.promote);
     item("Demote under the topic above", "indent-increase", !!s?.demote, a.demote);
@@ -255,6 +260,8 @@ export class FloatingPanel {
     set("boundary", s.siblings);
     set("relation", s.pair);
     set("callout", s.calloutable);
+    set("highlight", s.highlightable);
+    this.buttons.get("highlight")?.setAttr("aria-label", s.highlighted ? "Remove highlight" : "Highlight");
     set("edit", s.node || s.boundary || s.callout);
     set("remove", (s.node && (!s.root || s.canDeleteRoot)) || s.boundary || s.callout);
 

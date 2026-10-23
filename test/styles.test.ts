@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CUSTOM_THEME, DEFAULT_COLORS, colorsOf, mergeColors, parseThemes, presetColors, setUserThemes, themeIn, themeOptions, themesToJson, uniqueName } from "../src/styles.ts";
+import { CUSTOM_THEME, DEFAULT_COLORS, HIGHLIGHT_WIDTH, colorsOf, highlightStyle, mergeColors, parseThemes, presetColors, setUserThemes, themeIn, styleFor, themeOptions, themesToJson, uniqueName } from "../src/styles.ts";
 
 test("missing or broken colors get their defaults, and the old single relationship color is used for both", () => {
   const c = mergeColors({ central: { text: "#123456", border: 5 }, relationship: "#abcdef", branches: [{ stroke: "#111111" }] });
@@ -44,4 +44,15 @@ test("a taken name gets a number", () => {
 test("callout colors from before callouts lost their border take the new defaults", () => {
   assert.deepEqual(mergeColors({ callout: { text: "#000000", border: "#f08c00", fill: "#fff3bf" } }).callout, DEFAULT_COLORS.callout);
   assert.deepEqual(mergeColors({ callout: { text: "#000000", fill: "#123456" } }).callout, { text: "#000000", fill: "#123456" });
+});
+
+test("a highlighted topic takes the highlight colors and a thicker border; themes from before highlights get the defaults", () => {
+  assert.deepEqual(mergeColors({}).highlight, DEFAULT_COLORS.highlight);
+  const st = styleFor(2, DEFAULT_COLORS.branches[0], DEFAULT_COLORS);
+  const h = highlightStyle(st, DEFAULT_COLORS);
+  assert.equal(h.backgroundColor, DEFAULT_COLORS.highlight.fill);
+  assert.equal(h.textColor, DEFAULT_COLORS.highlight.text);
+  assert.equal(h.borderColor, st.borderColor);
+  assert.equal(h.strokeWidth, st.strokeWidth + HIGHLIGHT_WIDTH);
+  assert.equal(h.fontSize, st.fontSize);
 });

@@ -169,6 +169,16 @@ export class SceneTx {
     this.changes++;
   }
 
+  /** Adds the element right behind another one, which may itself be added in this transaction. */
+  addBehind(el: El, id: string) {
+    const i = this.order.indexOf(id);
+    if (i >= 0) return this.insert([el], i);
+    this.cur.set(el.id, el);
+    const j = this.added.indexOf(id);
+    this.added.splice(j < 0 ? this.added.length : j, 0, el.id);
+    this.changes++;
+  }
+
   delete(id: string) {
     if (this.cur.has(id)) this.patch(id, { isDeleted: true });
   }
