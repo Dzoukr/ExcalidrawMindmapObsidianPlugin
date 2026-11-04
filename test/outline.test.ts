@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { OutlineItem } from "../src/outline.ts";
-import { isOutline, parseOutline, toMarkdown } from "../src/outline.ts";
+import { isOutline, outlineTexts, parseOutline, toMarkdown } from "../src/outline.ts";
 
 const t = (text: string, ...children: OutlineItem[]): OutlineItem => ({ text, children });
 
@@ -31,6 +31,12 @@ test("markdown round trip keeps the structure and multi-line topics", () => {
   const md = toMarkdown(items);
   assert.equal(md, "- Central\n\t- A\n\t  second line\n\t\t- A1\n\t- B");
   assert.deepEqual(parseOutline(md), items);
+});
+
+test("the texts of an outline include everything under its items, links as they are", () => {
+  const link = "[[file.pdf#page=2&selection=0,7,0,17|file, page 2]]";
+  assert.deepEqual(outlineTexts([t("a", t("a1", t(link))), t("b")]), ["a", "a1", link, "b"]);
+  assert.deepEqual(outlineTexts([]), []);
 });
 
 test("JSON and blank text are not outlines", () => {
