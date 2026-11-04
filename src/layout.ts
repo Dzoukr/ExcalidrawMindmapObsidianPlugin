@@ -302,6 +302,16 @@ export function computeLayout(
   return { boxes, braces, boundaries, callouts };
 }
 
+/**
+ * Position and width of a topic sized to its text. The edge toward its parent stays put: the left edge on the
+ * right side, the right edge on the left side, and the central topic (no side) grows evenly both ways.
+ */
+export function fitToText(box: { x: number; width: number }, textWidth: number, minTextWidth: number, padX: number, side: Side | null): { x: number; width: number } {
+  const width = Math.max(minTextWidth, Math.ceil(textWidth)) + 2 * padX;
+  const x = side === null ? box.x + (box.width - width) / 2 : side === "L" ? box.x + box.width - width : box.x;
+  return { x, width };
+}
+
 /** The bubble of a callout of the given size, right above its topic and centered on it. */
 export function calloutBox(topic: Box, s: Size): Box {
   return { x: topic.x + topic.w / 2 - s.w / 2, y: topic.y - CALLOUT_GAP - s.h, w: s.w, h: s.h };

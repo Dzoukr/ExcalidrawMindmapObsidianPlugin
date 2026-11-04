@@ -1,7 +1,7 @@
 import { Notice } from "obsidian";
 import { Binding, El, ExcalidrawAutomate, ExcalidrawView, SceneTx, getEA } from "./excalidraw";
 import {
-  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, calloutBox, computeLayout, dropsOnto, edgePoints, findFreeSpot, relationBend, relationPoints,
+  Box, Brace, MOVE_EPSILON, RELATION_BEND, Side, Vec, bracePoints, calloutBox, computeLayout, dropsOnto, edgePoints, findFreeSpot, fitToText, relationBend, relationPoints,
   tailPoints, updateOffsets,
 } from "./layout";
 import {
@@ -227,6 +227,40 @@ export function commitEditing(view: ExcalidrawView): boolean {
   if (!ta) return false;
   ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
   return true;
+}
+
+/**
+ * While a topic's text is typed, widens the topic to fit its longest line, so the text does not wrap at
+ * the topic's old width and the topic keeps the shape it gets once editing ends. It only resizes the topic
+ * itself, without undo step; the whole map is laid out again when editing ends.
+ */
+export function fitWhileEditing(view: ExcalidrawView): void {
+  const api = view.excalidrawAPI;
+  const editing = api?.getAppState().editingTextElement;
+  const cid = editing?.containerId;
+  if (!api || !editing || !cid) return;
+  const ta = view.contentEl.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+  const els = api.getSceneElements();
+  const el = els.find((e) => e.id === cid);
+  const d = nodeData(el);
+  if (!el || !d || d.summary) return;
+  const map = buildMap(els, d.root);
+  const node = map?.nodes.get(cid);
+  if (!node) return;
+  const ea = getEA(view);
+  if (!ea) return;
+  try {
+    ea.style.fontFamily = editing.fontFamily;
+    ea.style.fontSize = editing.fontSize;
+    const raw = ta?.value ?? editing.originalText ?? editing.text ?? "";
+    const fit = fitToText(el, ea.measureText(raw.length ? raw : " ").width, MIN_TEXT_WIDTH, padOf(node).padX, node.side);
+    if (near(el.width, fit.width)) return;
+    const tx = new SceneTx(view);
+    tx.patch(el.id, fit);
+    tx.commit("NEVER");
+  } finally {
+    ea.destroy?.();
+  }
 }
 
 async function focusNode(view: ExcalidrawView, id: string, edit: boolean) {

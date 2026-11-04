@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { LNode, PlacedInfo } from "../src/layout.ts";
 import {
   BOUNDARY_PAD, BRACE_GAP, BRACE_W, CALLOUT_GAP, RELATION_GAP, ROOT_H_GAP, TAIL_HALF, TAIL_INSET, TITLE_INSET, TITLE_OVERLAP, H_GAP, SUMMARY_GAP, V_GAP, V_GAP_L1, computeLayout, dropsOnto,
-  findFreeSpot, relationBend, relationPoints, tailPoints, updateOffsets,
+  findFreeSpot, fitToText, relationBend, relationPoints, tailPoints, updateOffsets,
 } from "../src/layout.ts";
 
 const node = (id: string, side: "R" | "L" | null, children: LNode[] = []): LNode => ({ id, side, children });
@@ -235,4 +235,24 @@ test("a callout's tail runs straight down to the topic", () => {
   const t = tailPoints(bubble, { x: 0, y: 0, w: 100, h: 40 });
   assert.equal(t.x + TAIL_HALF, 50); // its base is centered over the tip, at the topic's middle
   assert.deepEqual(t.points[2], [50 - t.x, -2 - t.y]);
+});
+
+test("a topic sized to its text keeps the edge toward its parent", () => {
+  const box = { x: 100, width: 80 };
+  assert.deepEqual(fitToText(box, 100, 24, 10, "R"), { x: 100, width: 120 }); // grows to the right
+  assert.deepEqual(fitToText(box, 100, 24, 10, "L"), { x: 60, width: 120 }); // grows to the left
+  assert.deepEqual(fitToText(box, 100, 24, 10, null), { x: 80, width: 120 }); // the central topic, both ways
+});
+
+test("a topic sized to shorter text shrinks toward the edge it keeps", () => {
+  const box = { x: 100, width: 120 };
+  assert.deepEqual(fitToText(box, 60, 24, 10, "R"), { x: 100, width: 80 });
+  assert.deepEqual(fitToText(box, 60, 24, 10, "L"), { x: 140, width: 80 });
+  assert.deepEqual(fitToText(box, 60, 24, 10, null), { x: 120, width: 80 });
+});
+
+test("a topic sized to its text rounds the text width up and keeps the minimum", () => {
+  const box = { x: 0, width: 50 };
+  assert.equal(fitToText(box, 30.2, 24, 10, "R").width, 51);
+  assert.equal(fitToText(box, 5, 24, 10, "R").width, 44);
 });

@@ -5,7 +5,7 @@ import {
 import {
   Direction, addBoundary, addCallout, afterDrag, addChild, addRelationship, canAddCallout, followCallouts, followRelations, addSibling, addSummary, areSiblingTopics,
   changeLevel, commitEditing, deleteBoundary, deleteCallout, deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, followHalos, highlightState, editCallout, editNode,
-  editingCallout, editingNode, editingTitle, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
+  editingCallout, editingNode, editingTitle, fitWhileEditing, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
   relayout, resetAll, resetLayout, selectedBadge, selectedBoundary, selectedCallout, selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, setTheme,
   layoutOf, toggleAutoAlign, toggleFold, toggleHighlight, topicState, unfold,
 } from "./actions";
@@ -341,6 +341,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       s.raf = window.requestAnimationFrame(() => {
         s.raf = 0;
         this.checkBadge(s);
+        if (!this.paused && s.api.getAppState().editingTextElement) fitWhileEditing(s.view);
         if (!this.paused && !s.api.getAppState().editingTextElement) {
           followRelations(s.view);
           followCallouts(s.view);

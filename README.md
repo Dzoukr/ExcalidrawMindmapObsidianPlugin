@@ -27,7 +27,7 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 
 ### ⌨️ Keyboard-first editing
 
-Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. While editing, Enter commits the text and Tab commits it and adds a child.
+Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. A topic widens with its text as you type, so the text stays on one line. While editing, Enter commits the text and Tab commits it and adds a child.
 
 ### 📐 Automatic layout
 
