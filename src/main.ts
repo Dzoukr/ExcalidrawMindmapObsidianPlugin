@@ -105,6 +105,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const listen = (win: Window) => {
       this.registerDomEvent(win, "keydown", this.onKeyDown, { capture: true });
       for (const type of ["copy", "cut", "paste"] as const) this.registerDomEvent(win, type, this.onClipboard, { capture: true });
+      this.registerDomEvent(win, "input", this.onInput, { capture: true });
       this.registerDomEvent(win, "pointerdown", () => (this.pointerDown = true), { capture: true });
       this.registerDomEvent(win, "pointerup", this.onPointerUp, { capture: true });
       this.registerDomEvent(win, "pointercancel", this.onPointerUp, { capture: true });
@@ -551,6 +552,12 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (nodeId) await pasteOutline(view, nodeId, text);
     else await newMapFromOutline(view, text);
   }
+
+  /** Excalidraw wraps the text when the input reaches its editor, so a topic has to fit it before that. */
+  private onInput = (e: Event) => {
+    const view = this.activeView();
+    if (!this.paused && view?.containerEl.contains(e.target as Node)) fitWhileEditing(view);
+  };
 
   /**
    * Ctrl+C / Ctrl+X on selected topics copies their branches as a Markdown bullet list (cut deletes them),

@@ -257,7 +257,8 @@ export function fitWhileEditing(view: ExcalidrawView): void {
     if (near(el.width, fit.width)) return;
     const tx = new SceneTx(view);
     tx.patch(el.id, fit);
-    tx.commit("NEVER");
+    // Not "NEVER": the undo step of the edit would then not know the old width, and undo would keep the new one.
+    tx.commit("EVENTUALLY");
   } finally {
     ea.destroy?.();
   }
