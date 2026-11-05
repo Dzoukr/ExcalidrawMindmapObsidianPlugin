@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.0
+
+### New
+
+- **Keyboard shortcuts in the settings.** Change the keys of every action in the drawing on the new **Keyboard shortcuts** page: add child and sibling, edit, delete, duplicate, collapse, select, move among siblings and between levels, and finish editing. Each action can have several keys or none; restore one action's defaults or all of them. The panel's tooltips show the keys you set.
+
 ## 1.5.0
 
 ### New
