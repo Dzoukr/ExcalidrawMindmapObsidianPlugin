@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0
+
+### Changed
+
+- **A topic widens with its text as you type**, so the text stays on one line instead of wrapping and growing taller. The edge toward its parent stays put: topics on the right grow to the right, on the left to the left, and the central topic both ways. The rest of the map makes room once you finish editing.
+
+### Fixed
+
+- Pasted and duplicated topics show their links as Excalidraw does, with the display text and at its width, instead of the `[[link]]` source.
+
 ## 1.6.0
 
 ### New
