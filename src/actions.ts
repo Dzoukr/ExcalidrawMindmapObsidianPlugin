@@ -230,38 +230,61 @@ export function commitEditing(view: ExcalidrawView): boolean {
 }
 
 /**
- * While a topic's text is typed, widens the topic to fit its longest line, so the text does not wrap at
- * the topic's old width and the topic keeps the shape it gets once editing ends. It only resizes the topic
- * itself, without undo step; the whole map is laid out again when editing ends.
+ * A text being edited and, when it is a topic's, what it takes to keep the topic as wide as the text. It is
+ * worked out once when editing starts, so a keystroke only measures the text and, when that changes the
+ * width, resizes the topic. End it with endTextFit.
  */
-export function fitWhileEditing(view: ExcalidrawView): void {
+export interface TextFit {
+  textId: string; // the text element being edited
+  topic: { id: string; box: { x: number; width: number }; padX: number; side: Side | null } | null; // null: not a topic that follows its text
+  width: number; // the topic's width as last set
+  ea: ExcalidrawAutomate | null; // measures the text, for the whole edit
+  input: HTMLTextAreaElement | null; // Excalidraw's text editor
+}
+
+export function startTextFit(view: ExcalidrawView, editing: El): TextFit {
+  const fit: TextFit = { textId: editing.id, topic: null, width: 0, ea: null, input: null };
   const api = view.excalidrawAPI;
-  const editing = api?.getAppState().editingTextElement;
-  const cid = editing?.containerId;
-  if (!api || !editing || !cid) return;
-  const ta = view.contentEl.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+  const cid = editing.containerId;
+  if (!api || !cid) return fit;
   const els = api.getSceneElements();
   const el = els.find((e) => e.id === cid);
   const d = nodeData(el);
-  if (!el || !d || d.summary) return;
-  const map = buildMap(els, d.root);
-  const node = map?.nodes.get(cid);
-  if (!node) return;
-  const ea = getEA(view);
-  if (!ea) return;
-  try {
-    ea.style.fontFamily = editing.fontFamily;
-    ea.style.fontSize = editing.fontSize;
-    const raw = ta?.value ?? editing.originalText ?? editing.text ?? "";
-    const fit = fitToText(el, ea.measureText(raw.length ? raw : " ").width, MIN_TEXT_WIDTH, padOf(node).padX, node.side);
-    if (near(el.width, fit.width)) return;
-    const tx = new SceneTx(view);
-    tx.patch(el.id, fit);
-    // Not "NEVER": the undo step of the edit would then not know the old width, and undo would keep the new one.
-    tx.commit("EVENTUALLY");
-  } finally {
-    ea.destroy?.();
-  }
+  if (!el || !d || d.summary) return fit;
+  const node = buildMap(els, d.root)?.nodes.get(cid);
+  if (!node) return fit;
+  fit.ea = getEA(view);
+  if (!fit.ea) return fit;
+  fit.topic = { id: cid, box: { x: el.x, width: el.width }, padX: padOf(node).padX, side: node.side };
+  fit.width = el.width;
+  return fit;
+}
+
+/**
+ * While a topic's text is typed, widens the topic to fit its longest line, so the text does not wrap at
+ * the topic's old width and the topic keeps the shape it gets once editing ends. It only resizes the topic
+ * itself; the whole map is laid out again when editing ends.
+ */
+export function fitText(view: ExcalidrawView, fit: TextFit, editing: El): void {
+  const { topic, ea } = fit;
+  if (!topic || !ea) return;
+  if (!fit.input?.isConnected) fit.input = view.contentEl.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+  ea.style.fontFamily = editing.fontFamily;
+  ea.style.fontSize = editing.fontSize;
+  const raw = fit.input?.value ?? editing.originalText ?? editing.text ?? "";
+  const next = fitToText(topic.box, ea.measureText(raw.length ? raw : " ").width, MIN_TEXT_WIDTH, topic.padX, topic.side);
+  if (near(fit.width, next.width)) return;
+  fit.width = next.width;
+  const tx = new SceneTx(view);
+  tx.patch(topic.id, next);
+  // Not "NEVER": the undo step of the edit would then not know the old width, and undo would keep the new one.
+  tx.commit("EVENTUALLY");
+}
+
+export function endTextFit(fit: TextFit): void {
+  fit.ea?.destroy?.();
+  fit.ea = null;
+  fit.input = null;
 }
 
 async function focusNode(view: ExcalidrawView, id: string, edit: boolean) {

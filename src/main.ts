@@ -5,9 +5,9 @@ import {
 import {
   Direction, addBoundary, addCallout, afterDrag, addChild, addRelationship, canAddCallout, followCallouts, followRelations, addSibling, addSummary, areSiblingTopics,
   changeLevel, commitEditing, deleteBoundary, deleteCallout, deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, followHalos, highlightState, editCallout, editNode,
-  editingCallout, editingNode, editingTitle, fitWhileEditing, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
+  editingCallout, editingNode, editingTitle, endTextFit, fitText, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
   relayout, resetAll, resetLayout, selectedBadge, selectedBoundary, selectedCallout, selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, setTheme,
-  layoutOf, toggleAutoAlign, toggleFold, toggleHighlight, topicState, unfold,
+  layoutOf, startTextFit, TextFit, toggleAutoAlign, toggleFold, toggleHighlight, topicState, unfold,
 } from "./actions";
 import {
   DEFAULT_SHORTCUTS, KEY_ACTIONS, KeyAction, SHORTCUT_GROUPS, ShortcutInfo, Shortcuts, conflicts, formatShortcut, formatShortcuts, matchesShortcut, mergeShortcuts,
@@ -74,6 +74,7 @@ interface ViewState {
   unsubscribe?: () => void;
   panel: FloatingPanel;
   editing: El | null; // text element being edited, to detect when editing ends
+  fit: TextFit | null; // keeps the topic being typed in as wide as its text
   pending: ((nodeId: string) => unknown) | null; // action to run once editing ends
   raf: number;
   badge: string | null; // topic whose fold badge was clicked, so the click unfolds it once
@@ -348,7 +349,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (existing) this.detach(existing);
 
     const s: ViewState = {
-      view, api, panel: new FloatingPanel(this.panelActions(view), Platform.isMobile), editing: null, pending: null, raf: 0, badge: null,
+      view, api, panel: new FloatingPanel(this.panelActions(view), Platform.isMobile), editing: null, fit: null, pending: null, raf: 0, badge: null,
       drop: createDiv({ cls: "mm-drop-target mm-hidden" }),
     };
     s.panel.mount(view.contentEl);
@@ -360,6 +361,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private detach(s: ViewState) {
     s.unsubscribe?.();
     if (s.raf) window.cancelAnimationFrame(s.raf);
+    if (s.fit) endTextFit(s.fit);
+    s.fit = null;
     s.panel.destroy();
     s.drop.remove();
   }
@@ -377,7 +380,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       s.raf = window.requestAnimationFrame(() => {
         s.raf = 0;
         this.checkBadge(s);
-        if (!this.paused && s.api.getAppState().editingTextElement) fitWhileEditing(s.view);
+        this.fitText(s);
         if (!this.paused && !s.api.getAppState().editingTextElement) {
           followRelations(s.view);
           followCallouts(s.view);
@@ -591,8 +594,25 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   /** Excalidraw wraps the text when the input reaches its editor, so a topic has to fit it before that. */
   private onInput = (e: Event) => {
     const view = this.activeView();
-    if (!this.paused && view?.containerEl.contains(e.target as Node)) fitWhileEditing(view);
+    const s = view && this.states.get(view);
+    if (s && view.containerEl.contains(e.target as Node)) this.fitText(s);
   };
+
+  /**
+   * Keeps the topic being typed in as wide as its text. It runs on every input, and on every scene change for
+   * text that arrives without one, such as a picked link suggestion; both are cheap, as the topic is looked up
+   * only once per edit.
+   */
+  private fitText(s: ViewState) {
+    const editing = this.paused ? null : s.api.getAppState().editingTextElement;
+    if (s.fit && s.fit.textId !== editing?.id) {
+      endTextFit(s.fit);
+      s.fit = null;
+    }
+    if (!editing) return;
+    s.fit ??= startTextFit(s.view, editing);
+    fitText(s.view, s.fit, editing);
+  }
 
   /**
    * Ctrl+C / Ctrl+X on selected topics copies their branches as a Markdown bullet list (cut deletes them),
