@@ -5,7 +5,7 @@ import {
 import {
   Direction, addBoundary, addCallout, afterDrag, addChild, addRelationship, canAddCallout, followCallouts, followRelations, addSibling, addSummary, areSiblingTopics,
   changeLevel, commitEditing, deleteBoundary, deleteCallout, deleteNode, deleteNodes, demote, dropTargetBox, duplicateNodes, editBoundaryTitle, followHalos, highlightState, editCallout, editNode,
-  editingCallout, editingNode, editingTitle, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
+  editingCallout, editingNode, editingTitle, fitWhileEditing, isEmptyCallout, isLoneCentral, moveBoundary, moveNode, navigate, newMap, newMapFromOutline, onlyMap, outlineMarkdown, pasteOutline, promote,
   relayout, resetAll, resetLayout, selectedBadge, selectedBoundary, selectedCallout, selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, setTheme,
   layoutOf, toggleAutoAlign, toggleFold, toggleHighlight, topicState, unfold,
 } from "./actions";
@@ -111,6 +111,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     const listen = (win: Window) => {
       this.registerDomEvent(win, "keydown", this.onKeyDown, { capture: true });
       for (const type of ["copy", "cut", "paste"] as const) this.registerDomEvent(win, type, this.onClipboard, { capture: true });
+      this.registerDomEvent(win, "input", this.onInput, { capture: true });
       this.registerDomEvent(win, "pointerdown", () => (this.pointerDown = true), { capture: true });
       this.registerDomEvent(win, "pointerup", this.onPointerUp, { capture: true });
       this.registerDomEvent(win, "pointercancel", this.onPointerUp, { capture: true });
@@ -376,6 +377,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       s.raf = window.requestAnimationFrame(() => {
         s.raf = 0;
         this.checkBadge(s);
+        if (!this.paused && s.api.getAppState().editingTextElement) fitWhileEditing(s.view);
         if (!this.paused && !s.api.getAppState().editingTextElement) {
           followRelations(s.view);
           followCallouts(s.view);
@@ -585,6 +587,12 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (nodeId) await pasteOutline(view, nodeId, text);
     else await newMapFromOutline(view, text);
   }
+
+  /** Excalidraw wraps the text when the input reaches its editor, so a topic has to fit it before that. */
+  private onInput = (e: Event) => {
+    const view = this.activeView();
+    if (!this.paused && view?.containerEl.contains(e.target as Node)) fitWhileEditing(view);
+  };
 
   /**
    * Ctrl+C / Ctrl+X on selected topics copies their branches as a Markdown bullet list (cut deletes them),

@@ -29,7 +29,7 @@ These are the defaults; all but copy, cut and paste can be changed in the settin
 
 ### ⌨️ Keyboard-first editing
 
-Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. While editing, Enter commits the text and Tab commits it and adds a child. Prefer other keys? Change any of them in the settings.
+Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. A topic widens with its text as you type, so the text stays on one line. While editing, Enter commits the text and Tab commits it and adds a child. Prefer other keys? Change any of them in the settings.
 
 ### 📐 Automatic layout
 
