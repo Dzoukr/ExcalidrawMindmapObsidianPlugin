@@ -9,7 +9,7 @@ import {
   boundTextId, boundaryData, braceData, buildMap, calloutData, edgeData, hiddenState, isHidden, isRelationLabel, nodeData, orderLine, rangesIn, relationData,
   resolveNodeElement, rootIdOf, structureIn, structureOf, subtree, tailData, titleData, twoSided,
 } from "./model";
-import { OutlineItem, parseOutline, toMarkdown } from "./outline";
+import { OutlineItem, outlineTexts, parseOutline, toMarkdown } from "./outline";
 import {
   BADGE_FONT_SIZE, BADGE_GAP, BADGE_PADDING, BOUNDARY_TEXT, Branch, CALLOUT_FONT_SIZE, CALLOUT_PADDING, CALLOUT_TEXT, Colors, DEFAULT_TEXT, MIN_TEXT_WIDTH,
   NodeStyle, SUMMARY_PADDING, SUMMARY_TEXT, TITLE_FONT_SIZE, TITLE_PADDING, Theme, branchColor, colorsOf, connectorArrowhead, newMapDefaults, paddingFor,
@@ -244,11 +244,36 @@ interface NewNode {
   branch: Branch;
   colors: Colors; // of the map's theme
   style?: NodeStyle; // instead of the depth and branch style
-  text?: string;
+  text?: string; // its Markdown source
+  shown?: string; // the text as shown, when its links are parsed already
   data: Omit<NodeData, "self">;
   at: Vec;
   fontFamily: number;
   roughness: number;
+}
+
+/** Shows a text as Excalidraw parsed it; the element keeps its Markdown source in rawText, as after editing. */
+const shownText = (shown: string, source: string): Partial<El> => ({ text: shown, originalText: shown, hasTextLink: shown !== source });
+
+/**
+ * The texts as Excalidraw shows them, which it does by itself only for text edited in the drawing. A text
+ * missing from the result stays as it is, as all of them do with a version of Excalidraw that can't parse them.
+ */
+async function parsedTexts(view: ExcalidrawView, texts: string[]): Promise<Map<string, string>> {
+  const parsed = new Map<string, string>();
+  const ea = getEA(view);
+  if (!ea) return parsed;
+  try {
+    for (const t of new Set(texts)) {
+      const shown = await ea.parseText(t);
+      if (shown) parsed.set(t, shown);
+    }
+  } catch {
+    // Parsing only makes the text look right, so what is parsed so far will do.
+  } finally {
+    ea.destroy?.();
+  }
+  return parsed;
 }
 
 function createNode(tx: SceneTx, ea: ExcalidrawAutomate, n: NewNode): string {
@@ -269,7 +294,8 @@ function createNode(tx: SceneTx, ea: ExcalidrawAutomate, n: NewNode): string {
     textAlign: "center",
     verticalAlign: "middle",
   });
-  const id = ea.addText(n.at.x, n.at.y, n.text ?? DEFAULT_TEXT[Math.min(n.depth, 2)], {
+  const source = n.text ?? DEFAULT_TEXT[Math.min(n.depth, 2)];
+  const id = ea.addText(n.at.x, n.at.y, source, {
     box: true,
     boxPadding: st.padX,
     boxStrokeColor: st.borderColor,
@@ -278,6 +304,7 @@ function createNode(tx: SceneTx, ea: ExcalidrawAutomate, n: NewNode): string {
   });
   for (const el of ea.getElements()) {
     if (el.id === id) el.customData = { ...(el.customData ?? {}), [KEY]: { ...n.data, self: id, root: n.data.root || id } };
+    else if (n.shown !== undefined && el.type === "text") Object.assign(el, shownText(n.shown, source));
     tx.add(el);
   }
   ea.clear();
@@ -1690,7 +1717,7 @@ export async function newMap(view: ExcalidrawView) {
 }
 
 /** Adds a new map at a free spot in view, its central topic with the text and subtopics given; returns the central topic. */
-function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: OutlineItem[] = []): string {
+function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: OutlineItem[] = [], parsed = new Map<string, string>()): string {
   const st = tx.api.getAppState();
   const z = st.zoom?.value ?? 1;
   const visible: Box = { x: -st.scrollX, y: -st.scrollY, w: st.width / z, h: st.height / z };
@@ -1702,6 +1729,7 @@ function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: Ou
     branch: branchColor(0, colors),
     colors,
     text,
+    shown: text === undefined ? undefined : parsed.get(text),
     data: { root: "", parent: null, order: 0, ...newMapDefaults() },
     at: { x: c.x - 90, y: c.y - 30 },
     fontFamily: st.currentItemFontFamily,
@@ -1709,7 +1737,7 @@ function createMap(tx: SceneTx, ea: ExcalidrawAutomate, text?: string, items: Ou
   });
   if (items.length) {
     const found = mapOf(tx, id)!;
-    addOutline(tx, ea, found.map, found.node, items);
+    addOutline(tx, ea, found.map, found.node, items, parsed);
   }
   layoutMap(tx, ea, id);
   return id;
@@ -2493,6 +2521,7 @@ function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode
       branch: branchOf(x),
       colors,
       text: topicText(x),
+      shown: x.text?.originalText,
       data: {
         ...rest,
         root,
@@ -2513,7 +2542,7 @@ function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode
     if (c) {
       const copy = attachCallout(tx, ea, root, id, calloutText(c), colors);
       tx.patch(copy.bubble.id, lookOf(c.el, LOOK));
-      if (c.text) tx.patch(copy.label.id, lookOf(c.text, TEXT_LOOK));
+      if (c.text) tx.patch(copy.label.id, { ...lookOf(c.text, TEXT_LOOK), ...shownText(c.text.originalText ?? calloutText(c), calloutText(c)) });
       if (c.tail) tx.patch(copy.tail.id, lookOf(c.tail, LOOK));
     }
   }
@@ -2525,7 +2554,7 @@ function copyBranch(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, n: MMNode
     Object.assign(els[0], lookOf(b.el, LOOK));
     if (b.title) Object.assign(els[1], lookOf(b.title, LOOK));
     const title = b.titleText?.rawText ?? b.titleText?.originalText ?? b.titleText?.text;
-    if (b.titleText && title !== undefined) Object.assign(els[2], { ...lookOf(b.titleText, TEXT_LOOK), text: title, originalText: title, rawText: title });
+    if (b.titleText && title !== undefined) Object.assign(els[2], { ...lookOf(b.titleText, TEXT_LOOK), ...shownText(b.titleText.originalText ?? title, title), rawText: title });
     tx.insert(els, tx.indexOf(b.id)); // behind the topics, like the original
   }
   return ids.get(n.id)!;
@@ -2618,7 +2647,7 @@ export function outlineMarkdown(view: ExcalidrawView, nodeIds: string[]): string
 }
 
 /** Adds the outline items, with everything under them, as subtopics of the node; returns the new subtopics. */
-function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMNode, items: OutlineItem[]): string[] {
+function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMNode, items: OutlineItem[], parsed: Map<string, string>): string[] {
   const fontFamily = node.text?.fontFamily ?? tx.api.getAppState().currentItemFontFamily;
   const at = { x: node.el.x + node.el.width + 40, y: node.el.y };
   // Like addChild: main topics alternate sides and take the next branch color, others the color of their branch.
@@ -2628,7 +2657,7 @@ function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMN
   const inherited = node.parent ? branchOf(node.covers ? map.nodes.get(node.covers[0])! : node) : null;
   const add = (parent: string, depth: number, branch: Branch, it: OutlineItem, order: number, side?: Side): string => {
     const data = { root: map.root.id, parent, order, ...(side ? { side } : {}) };
-    const id = createNode(tx, ea, { depth, branch, colors, text: it.text, data, at, fontFamily, roughness: node.el.roughness });
+    const id = createNode(tx, ea, { depth, branch, colors, text: it.text, shown: parsed.get(it.text), data, at, fontFamily, roughness: node.el.roughness });
     it.children.forEach((c, i) => add(id, depth + 1, branch, c, i));
     return id;
   };
@@ -2645,11 +2674,12 @@ function addOutline(tx: SceneTx, ea: ExcalidrawAutomate, map: MindMap, node: MMN
 export async function pasteOutline(view: ExcalidrawView, nodeId: string, md: string): Promise<boolean> {
   const items = parseOutline(md);
   if (!items.length) return false;
+  const parsed = await parsedTexts(view, outlineTexts(items));
   const first = run(view, (tx, ea) => {
     const found = mapOf(tx, nodeId);
     if (!found) return null;
     setFolded(tx, found.node, false);
-    const ids = addOutline(tx, ea, found.map, found.node, items);
+    const ids = addOutline(tx, ea, found.map, found.node, items, parsed);
     layoutMap(tx, ea, found.map.root.id);
     return ids[0];
   });
@@ -2665,7 +2695,8 @@ export async function newMapFromOutline(view: ExcalidrawView, md: string): Promi
   const items = parseOutline(md);
   if (!items.length) return false;
   const single = items.length === 1;
-  const id = run(view, (tx, ea) => createMap(tx, ea, single ? items[0].text : undefined, single ? items[0].children : items));
+  const parsed = await parsedTexts(view, outlineTexts(items));
+  const id = run(view, (tx, ea) => createMap(tx, ea, single ? items[0].text : undefined, single ? items[0].children : items, parsed));
 
   if (id) await focusNode(view, id, false);
   return true;

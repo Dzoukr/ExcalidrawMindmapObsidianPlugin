@@ -75,7 +75,7 @@ Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into
 
 ### 🔗 Links to notes
 
-Type `[[` in a topic to open Excalidraw's link suggester for notes, headings, blocks and tags. Ctrl+click the topic to open the note. Links are kept when topics are copied as Markdown and pasted back.
+Type `[[` in a topic to open Excalidraw's link suggester for notes, headings, blocks and tags. Ctrl+click the topic to open the note. Links are kept when topics are copied as Markdown and pasted back, and when they are duplicated, and they show their display text right away.
 
 ### 🎨 Themes and your colors
 
