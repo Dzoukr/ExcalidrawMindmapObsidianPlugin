@@ -1,6 +1,6 @@
 import {
-  App, FuzzySuggestModal, ItemView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem, SettingDefinitionPage,
-  normalizePath,
+  App, FuzzySuggestModal, ItemView, KeymapEventHandler, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Scope, Setting, SettingDefinition, SettingDefinitionItem, SettingDefinitionPage,
+  normalizePath, setIcon,
 } from "obsidian";
 import {
   Direction, addBoundary, addCallout, afterDrag, addChild, addRelationship, canAddCallout, followCallouts, followRelations, addSibling, addSummary, areSiblingTopics,
@@ -9,6 +9,10 @@ import {
   relayout, resetAll, resetLayout, selectedBadge, selectedBoundary, selectedCallout, selectedEnds, selectedNode, selectedNodes, selectedTopics, setStructure, setTheme,
   layoutOf, toggleAutoAlign, toggleFold, toggleHighlight, topicState, unfold,
 } from "./actions";
+import {
+  DEFAULT_SHORTCUTS, KEY_ACTIONS, KeyAction, SHORTCUT_GROUPS, ShortcutInfo, Shortcuts, conflicts, formatShortcut, formatShortcuts, matchesShortcut, mergeShortcuts,
+  parseShortcut, sameShortcuts, shortcutOf, typesText,
+} from "./keys";
 import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
 import { STRUCTURES, Structure, calloutData, isStructure, nodeData, titleData } from "./model";
 import { isOutline } from "./outline";
@@ -28,11 +32,13 @@ interface Settings {
   autoAlign: boolean; // of new maps
   theme: Theme; // of new maps
   themes: UserTheme[]; // the user's own, after the presets
+  shortcuts: Shortcuts;
 }
 
 const DEFAULT_SETTINGS: Settings = {
   showPanelOnDesktop: true, panelPosition: "bottom", panelStyle: "default", allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true,
   theme: CUSTOM_THEME, themes: [{ id: CUSTOM_THEME, name: "Custom", colors: DEFAULT_COLORS }],
+  shortcuts: DEFAULT_SHORTCUTS,
 };
 
 /**
@@ -52,6 +58,7 @@ function mergeSettings(saved: (Partial<Settings> & { colors?: unknown }) | null)
   if (!isPanelPosition(merged.panelPosition)) merged.panelPosition = DEFAULT_SETTINGS.panelPosition;
   if (!isPanelStyle(merged.panelStyle)) merged.panelStyle = DEFAULT_SETTINGS.panelStyle;
   merged.theme = validTheme(merged.theme, merged.themes);
+  merged.shortcuts = mergeShortcuts(saved?.shortcuts);
   return merged;
 }
 
@@ -73,7 +80,7 @@ interface ViewState {
   drop: HTMLElement; // outline of the topic a dragged topic becomes a subtopic of when dropped
 }
 
-const ARROWS: Record<string, Direction> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+const SELECT: [KeyAction, Direction][] = [["selectUp", "up"], ["selectDown", "down"], ["selectLeft", "left"], ["selectRight", "right"]];
 const ATTACH_RETRIES = 50;
 
 export default class ExcalidrawMindMapPlugin extends Plugin {
@@ -84,7 +91,10 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   // Obsidian handles its own hotkeys (F2 = rename file) before any DOM listener,
   // so keys that clash with Obsidian are claimed through a keymap scope while a drawing is active.
   private keyScope!: Scope;
+  private scopeKeys: KeymapEventHandler[] = [];
   private scopePushed = false;
+  // A key reaches both the scope and the window listener: the second one leaves a key the first one took.
+  private handled = new WeakSet<KeyboardEvent>();
   // While paused, keys and text edits are left to Excalidraw. Not saved: a restart resumes.
   private paused = false;
   private pointerDown = false;
@@ -95,11 +105,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.addSettingTab(new MindMapSettingTab(this.app, this));
 
     this.keyScope = new Scope(this.app.scope);
-    this.keyScope.register([], "F2", () => {
-      const view = this.activeView();
-      if (view) void this.edit(view);
-      return false;
-    });
+    this.registerScopeKeys();
 
     // Excalidraw copies and pastes through the clipboard events, so taking them first turns them into Markdown for topics.
     const listen = (win: Window) => {
@@ -237,7 +243,36 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   async saveSettings() {
     this.applySettings();
     await this.saveData(this.settings);
-    for (const s of this.states.values()) this.refreshPanel(s);
+    this.registerScopeKeys();
+    for (const s of this.states.values()) {
+      s.panel.refreshLabels();
+      this.refreshPanel(s);
+    }
+  }
+
+  /** The actions' shortcuts as the user reads them, "" when they have none. */
+  shortcutHint(...actions: KeyAction[]): string {
+    return formatShortcuts(actions.flatMap((a) => this.settings.shortcuts[a]), Platform.isMacOS);
+  }
+
+  /**
+   * Claims the shortcuts through the keymap scope too, so the ones that are also Obsidian hotkeys (F2 renames the file)
+   * work on a selected topic. Keys the plugin doesn't take then go on to Obsidian.
+   */
+  private registerScopeKeys() {
+    for (const h of this.scopeKeys) this.keyScope.unregister(h);
+    this.scopeKeys = [];
+    const keys = new Set<string>();
+    for (const a of KEY_ACTIONS) {
+      if (a === "finishEditing") continue; // the scope is off while editing
+      for (const s of this.settings.shortcuts[a]) {
+        const key = parseShortcut(s)?.key;
+        if (!key) continue;
+        const k = key === "Space" ? " " : key;
+        keys.add(k).add(k.toLowerCase());
+      }
+    }
+    for (const k of keys) this.scopeKeys.push(this.keyScope.register(null, k, (e) => (this.handleKey(e) ? false : true)));
   }
 
   private applySettings() {
@@ -617,6 +652,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       setTheme: (t) => this.runOnMap(view, (id) => setTheme(view, id, t)),
       toggleAutoAlign: () => this.runOnMap(view, (id) => toggleAutoAlign(view, id)),
       togglePause: () => this.togglePause(),
+      shortcut: (...actions) => this.shortcutHint(...actions),
     };
   }
 
@@ -635,136 +671,90 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   // ---------- keyboard ----------
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (this.paused || !e.isTrusted || e.isComposing) return; // our own replayed keys pass through to Excalidraw
+    this.handleKey(e);
+  };
+
+  /** Runs the mind map action the key is a shortcut for; true when it took the key. */
+  private handleKey(e: KeyboardEvent): boolean {
+    if (this.handled.has(e)) return true;
+    if (this.paused || !e.isTrusted || e.isComposing) return false; // our own replayed keys pass through to Excalidraw
     const view = this.activeView();
-    if (!view) return;
+    if (!view) return false;
     const target = e.target as HTMLElement;
-    if (!view.containerEl.contains(target) && target !== target.ownerDocument?.body) return;
+    if (!view.containerEl.contains(target) && target !== target.ownerDocument?.body) return false;
     const appState = view.excalidrawAPI!.getAppState();
-    if (appState.viewModeEnabled) return;
-    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
-    // XMind's Alt+Up/Down reorders the topic among its siblings, Alt+Left/Right promotes or demotes it.
-    const alt = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
-    const reorder = alt && (e.key === "ArrowUp" || e.key === "ArrowDown");
-    const level = alt && (e.key === "ArrowLeft" || e.key === "ArrowRight");
-    // XMind's Ctrl+/ (Cmd+/ on Mac) collapses or expands the topic; the physical key also counts on other keyboard layouts.
-    const fold = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "/" || e.code === "Slash");
-    // XMind's Ctrl+D (Cmd+D on Mac) duplicates the topic; Excalidraw's own would copy its shapes, not the topic.
-    const dup = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === "d" || e.code === "KeyD");
-    if (!plain && !reorder && !level && !fold && !dup) return;
-
-    let action: ((id: string) => unknown) | null = null;
-
-    if (dup) {
-      if (appState.editingTextElement) return;
-      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
-      const ids = selectedTopics(view).map((n) => n.id);
-      if (!ids.length) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      void duplicateNodes(view, ids);
-      return;
-    } else if (fold) {
-      if (appState.editingTextElement || !selectedNode(view)) return;
-      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
-      action = (id) => toggleFold(view, id);
-    } else if (reorder) {
-      if (appState.editingTextElement) return;
-      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
-      const boundary = selectedBoundary(view);
-      if (boundary) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        void moveBoundary(view, boundary, e.key === "ArrowUp");
-        return;
-      }
-      if (!selectedNode(view)) return;
-      action = (id) => moveNode(view, id, e.key === "ArrowUp");
-    } else if (level) {
-      if (appState.editingTextElement || !selectedNode(view)) return;
-      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
-      action = (id) => changeLevel(view, id, e.key === "ArrowRight" ? "right" : "left");
-    } else if (appState.editingTextElement) {
-      // Excalidraw's [[link]] suggester is open: its Enter and Tab pick a link.
-      if (e.defaultPrevented || target.ownerDocument.body.querySelector(":scope > .suggestion-container")) return;
-      if (editingTitle(view) || editingCallout(view)) {
-        // Enter commits a boundary title or a callout; Shift+Enter starts a new line.
-        if (e.key !== "Enter" || e.shiftKey) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        commitEditing(view);
-        return;
-      }
-      // XMind behaviour inside the text editor: Enter commits, Tab/Insert commits and adds a child.
-      if (!editingNode(view)) return;
-      if (e.key === "Enter" && !e.shiftKey) action = () => undefined;
-      else if ((e.key === "Tab" && !e.shiftKey) || e.key === "Insert") action = (id) => addChild(view, id);
-      if (!action) return;
-    } else {
-      if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
-      const boundary = selectedBoundary(view);
-      if (boundary) {
-        // A selected boundary: Delete removes it, Space or Enter edits its title.
-        if (e.key === "Delete" || e.key === "Backspace") void deleteBoundary(view, boundary);
-        else if ((e.key === " " || e.key === "Enter") && !e.repeat) void editBoundaryTitle(view, boundary);
-        else return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        return;
-      }
-      const callout = selectedCallout(view);
-      if (callout) {
-        // A selected callout too: Delete removes it, Space or Enter edits its text.
-        if (e.key === "Delete" || e.key === "Backspace") void deleteCallout(view, callout);
-        else if ((e.key === " " || e.key === "Enter") && !e.repeat) void editCallout(view, callout);
-        else return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        return;
-      }
-      if (!selectedNode(view)) {
-        // Several topics selected, maybe with their connectors: Delete removes them all.
-        const topics = e.key === "Delete" || e.key === "Backspace" ? selectedTopics(view) : [];
-        if (!topics.length) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        void deleteNodes(view, topics.map((n) => n.id), this.settings.allowDeleteCentralTopic);
-        return;
-      }
-      switch (e.key) {
-        case "Tab":
-          if (!e.shiftKey) action = (id) => addChild(view, id);
-          break;
-        case "Insert":
-          action = (id) => addChild(view, id);
-          break;
-        case "Enter":
-          action = (id) => addSibling(view, id, e.shiftKey);
-          break;
-        case "Delete":
-        case "Backspace":
-          action = (id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic);
-          break;
-        case " ":
-          if (!e.repeat) action = (id) => editNode(view, id);
-          break;
-        default:
-          if (ARROWS[e.key] && !e.shiftKey) action = (id) => navigate(view, id, ARROWS[e.key]);
-      }
-      if (!action) return;
-    }
-
+    if (appState.viewModeEnabled) return false;
+    const run = this.keyAction(view, e, target, appState);
+    if (!run) return false;
+    this.handled.add(e);
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
-    this.runOnNode(view, action);
-  };
+    void run();
+    return true;
+  }
+
+  /** What the key does in the drawing, or null when it is no shortcut there and goes on to Excalidraw. */
+  private keyAction(view: ExcalidrawView, e: KeyboardEvent, target: HTMLElement, appState: AppState): (() => unknown) | null {
+    const shortcuts = this.settings.shortcuts;
+    const is = (a: KeyAction) => shortcuts[a].some((s) => matchesShortcut(e, s));
+    const onNode = (action: (id: string) => unknown) => () => this.runOnNode(view, action);
+
+    if (appState.editingTextElement) {
+      // Excalidraw's [[link]] suggester is open: its Enter and Tab pick a link.
+      if (e.defaultPrevented || target.ownerDocument.body.querySelector(":scope > .suggestion-container")) return null;
+      // Keys that type text keep typing it.
+      const editorIs = (a: KeyAction) => shortcuts[a].some((s) => !typesText(s) && matchesShortcut(e, s));
+      if (editingTitle(view) || editingCallout(view)) return editorIs("finishEditing") ? () => commitEditing(view) : null;
+      // XMind behaviour inside the text editor: Enter commits, Tab/Insert commits and adds a child.
+      if (!editingNode(view)) return null;
+      if (editorIs("finishEditing")) return onNode(() => undefined);
+      if (editorIs("addChild")) return onNode((id) => addChild(view, id));
+      return null;
+    }
+    if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return null;
+
+    // Excalidraw's own duplicate would copy the shapes, not the topics.
+    if (is("duplicate")) {
+      const ids = selectedTopics(view).map((n) => n.id);
+      return ids.length ? () => duplicateNodes(view, ids) : null;
+    }
+    const boundary = selectedBoundary(view);
+    if (boundary) {
+      // A selected boundary moves with its topics, Delete removes it, and the keys that edit or add a sibling edit its title.
+      if (is("moveUp") || is("moveDown")) {
+        const up = is("moveUp");
+        return () => moveBoundary(view, boundary, up);
+      }
+      if (is("remove")) return () => deleteBoundary(view, boundary);
+      if ((is("edit") || is("addSibling")) && !e.repeat) return () => editBoundaryTitle(view, boundary);
+      return null;
+    }
+    const callout = selectedCallout(view);
+    if (callout) {
+      if (is("remove")) return () => deleteCallout(view, callout);
+      if ((is("edit") || is("addSibling")) && !e.repeat) return () => editCallout(view, callout);
+      return null;
+    }
+    if (!selectedNode(view)) {
+      // Several topics selected, maybe with their connectors: Delete removes them all.
+      const topics = is("remove") ? selectedTopics(view) : [];
+      return topics.length ? () => deleteNodes(view, topics.map((n) => n.id), this.settings.allowDeleteCentralTopic) : null;
+    }
+    if (is("addChild")) return onNode((id) => addChild(view, id));
+    if (is("addSibling")) return onNode((id) => addSibling(view, id, false));
+    if (is("addSiblingAbove")) return onNode((id) => addSibling(view, id, true));
+    if (is("remove")) return onNode((id) => deleteNode(view, id, this.settings.allowDeleteCentralTopic));
+    // Held, the key would open the editor again and again.
+    if (is("edit")) return e.repeat ? null : onNode((id) => editNode(view, id));
+    if (is("toggleFold")) return onNode((id) => toggleFold(view, id));
+    if (is("moveUp")) return onNode((id) => moveNode(view, id, true));
+    if (is("moveDown")) return onNode((id) => moveNode(view, id, false));
+    if (is("levelLeft")) return onNode((id) => changeLevel(view, id, "left"));
+    if (is("levelRight")) return onNode((id) => changeLevel(view, id, "right"));
+    const dir = SELECT.find(([a]) => is(a))?.[1];
+    return dir ? onNode((id) => navigate(view, id, dir)) : null;
+  }
 }
 
 class StructureModal extends FuzzySuggestModal<Structure> {
@@ -924,7 +914,124 @@ class MindMapSettingTab extends PluginSettingTab {
         displayValue: () => String(this.plugin.settings.themes.length),
         items: [this.themeList(), this.themeTransfer()],
       },
+      this.shortcutPage(),
     ];
+  }
+
+  /** The keys of the mind map actions in the drawing, each changed like Obsidian's own hotkeys. */
+  private shortcutPage(): SettingDefinitionPage {
+    const shortcuts = this.plugin.settings.shortcuts;
+    const changed = KEY_ACTIONS.filter((a) => !sameShortcuts(shortcuts[a], DEFAULT_SHORTCUTS[a])).length;
+    return {
+      type: "page",
+      name: "Keyboard shortcuts",
+      desc: "The keys that build and edit a map in the drawing. Copy, cut and paste stay on the system's keys; the commands, such as Add boundary, get hotkeys in Obsidian's Hotkeys settings.",
+      displayValue: () => (changed ? `${changed} changed` : ""),
+      items: [
+        ...SHORTCUT_GROUPS.map((g): SettingDefinitionItem => ({ type: "group", heading: g.heading, items: g.actions.map((a) => this.shortcutRow(a)) })),
+        {
+          type: "group",
+          items: [
+            {
+              name: "Restore all defaults",
+              desc: "The shortcuts the mind map comes with, like XMind's.",
+              disabled: () => !changed,
+              action: () => {
+                this.plugin.settings.shortcuts = structuredClone(DEFAULT_SHORTCUTS);
+                void this.saveAndUpdate();
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  /** An action's shortcuts, each removable, a button that records another one, and one that restores its defaults. */
+  private shortcutRow(info: ShortcutInfo): SettingDefinition {
+    const settings = this.plugin.settings;
+    const mac = Platform.isMacOS;
+    return {
+      name: info.name,
+      desc: info.desc,
+      render: (s: Setting) => {
+        const keys = s.controlEl.createDiv({ cls: "setting-command-hotkeys" });
+        const list = settings.shortcuts[info.id];
+        for (const k of list) {
+          const chip = keys.createSpan({ cls: "setting-hotkey", text: formatShortcut(k, mac) });
+          const del = chip.createSpan({ cls: "setting-hotkey-icon setting-delete-hotkey", attr: { "aria-label": "Remove this shortcut" } });
+          setIcon(del, "x");
+          del.addEventListener("click", () => {
+            settings.shortcuts[info.id] = list.filter((x) => x !== k);
+            void this.saveAndUpdate();
+          });
+        }
+        if (!list.length) keys.createSpan({ cls: "setting-hotkey mod-empty", text: "Blank" });
+
+        let stop: (() => void) | null = null;
+        if (!sameShortcuts(list, DEFAULT_SHORTCUTS[info.id]))
+          s.addExtraButton((b) =>
+            b.setIcon("rotate-ccw").setTooltip("Restore default").onClick(() => {
+              settings.shortcuts[info.id] = [...DEFAULT_SHORTCUTS[info.id]];
+              void this.saveAndUpdate();
+            }),
+          );
+        s.addExtraButton((b) =>
+          b.setIcon("circle-plus").setTooltip("Add shortcut").onClick(() => {
+            if (stop) return;
+            const chip = keys.createSpan({ cls: "setting-hotkey mod-active", text: "Press the keys…" });
+            stop = this.recordShortcut(keys.doc, (shortcut) => {
+              stop = null;
+              chip.remove();
+              if (shortcut) this.addShortcut(info.id, shortcut);
+            });
+          }),
+        );
+        return () => stop?.();
+      },
+    };
+  }
+
+  /**
+   * Waits for the keys of a shortcut, taking them from Obsidian and the settings, which Escape would close.
+   * Escape or a click elsewhere cancels. Returns a function that cancels it.
+   */
+  private recordShortcut(doc: Document, done: (shortcut: string | null) => void): () => void {
+    const scope = new Scope();
+    const finish = (shortcut: string | null) => {
+      this.app.keymap.popScope(scope);
+      doc.removeEventListener("pointerdown", cancel, true);
+      done(shortcut);
+    };
+    const cancel = () => finish(null);
+    scope.register(null, null, (e) => {
+      if (e.key === "Escape") finish(null);
+      else {
+        const shortcut = shortcutOf(e);
+        if (shortcut) finish(shortcut);
+      }
+      return false;
+    });
+    this.app.keymap.pushScope(scope);
+    doc.addEventListener("pointerdown", cancel, true);
+    return cancel;
+  }
+
+  /** Adds the shortcut to the action, taking it from the actions that would share the key. */
+  private addShortcut(action: KeyAction, shortcut: string) {
+    const shortcuts = this.plugin.settings.shortcuts;
+    const mac = Platform.isMacOS;
+    if (action === "finishEditing" && typesText(shortcut))
+      return void new Notice(`${formatShortcut(shortcut, mac)} types text, so it can't finish editing.`);
+    if (shortcuts[action].includes(shortcut)) return;
+    const taken = conflicts(shortcuts, action, shortcut);
+    for (const a of taken) shortcuts[a] = shortcuts[a].filter((x) => x !== shortcut);
+    shortcuts[action] = [...shortcuts[action], shortcut];
+    if (taken.length) {
+      const names = taken.map((a) => SHORTCUT_GROUPS.flatMap((g) => g.actions).find((x) => x.id === a)!.name);
+      new Notice(`${formatShortcut(shortcut, mac)} no longer does: ${names.join(", ")}.`);
+    }
+    void this.saveAndUpdate();
   }
 
   /** The user's themes, each a page of its colors. */

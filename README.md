@@ -23,11 +23,13 @@ Open a drawing and click **New mind map** in the floating panel, or run the comm
 | Alt+Left / Alt+Right | Promote or demote the topic (toward or away from the central topic, mirrored on the left side) |
 | Ctrl+/ (Cmd+/ on Mac) | Collapse or expand the topic |
 
+These are the defaults; all but copy, cut and paste can be changed in the settings, see [Keyboard shortcuts](#keyboard-shortcuts).
+
 ## Key Features
 
 ### ⌨️ Keyboard-first editing
 
-Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. A topic widens with its text as you type, so the text stays on one line. While editing, Enter commits the text and Tab commits it and adds a child.
+Build a whole map without touching the mouse, with the shortcuts you know from XMind. Add children and siblings, edit text, duplicate and delete branches, move between topics and reorder them. A topic widens with its text as you type, so the text stays on one line. While editing, Enter commits the text and Tab commits it and adds a child. Prefer other keys? Change any of them in the settings.
 
 ### 📐 Automatic layout
 
@@ -73,7 +75,7 @@ Ctrl+C copies the selected topics as a Markdown bullet list, ready to paste into
 
 ### 🔗 Links to notes
 
-Type `[[` in a topic to open Excalidraw's link suggester for notes, headings, blocks and tags. Ctrl+click the topic to open the note. Links are kept when topics are copied as Markdown and pasted back.
+Type `[[` in a topic to open Excalidraw's link suggester for notes, headings, blocks and tags. Ctrl+click the topic to open the note. Links are kept when topics are copied as Markdown and pasted back, and when they are duplicated, and they show their display text right away.
 
 ### 🎨 Themes and your colors
 
@@ -120,6 +122,10 @@ All options are in **Settings → Excalidraw Mind Map**.
 **Import and export** exports all your themes as JSON, to the clipboard or a file in the vault, and brings themes in from the clipboard or a file. A map whose theme was deleted, or comes from another vault, gets the Classic colors for new topics.
 
 Color and arrow changes apply to topics and connectors created afterwards. To apply them to an existing map, pick its theme again from the panel, or use **Reset all** from the panel's layout settings or the command palette.
+
+### Keyboard shortcuts
+
+The **Keyboard shortcuts** page of the settings lists the keys of every action in the drawing: adding, editing, deleting, duplicating and collapsing topics, moving the selection, moving topics among their siblings and between levels, and finishing the text being edited. Like Obsidian's own hotkeys, remove a key with its **×**, add one with **+** and press it (Escape cancels), or restore an action's defaults; **Restore all defaults** brings back the XMind keys. A key given to one action is taken from the action that had it. Ctrl means Cmd on Mac, either one works. Keys that type a character can't finish editing, and they don't add a child while you type. Copy, cut and paste stay on the system's keys, and the commands, such as "Add boundary around selected topics", get hotkeys in Obsidian's own **Hotkeys** settings.
 
 ## Development
 

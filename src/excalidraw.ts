@@ -86,6 +86,7 @@ export interface ExcalidrawAutomate {
   getElement(id: string): El;
   getElements(): El[];
   measureText(text: string): { width: number; height: number };
+  parseText(text: string): Promise<string | undefined>; // the text as shown, with its links parsed
   selectElementsInView(ids: string[]): void;
   destroy?(): void;
 }

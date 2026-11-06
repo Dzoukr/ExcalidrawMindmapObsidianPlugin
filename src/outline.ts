@@ -83,6 +83,11 @@ export function toMarkdown(items: OutlineItem[]): string {
   return out.join("\n");
 }
 
+/** The texts of the items and of everything under them. */
+export function outlineTexts(items: OutlineItem[]): string[] {
+  return items.flatMap((it) => [it.text, ...outlineTexts(it.children)]);
+}
+
 /** Whether pasted text should become topics: anything but blank text and JSON, such as Excalidraw's own clipboard. */
 export function isOutline(text: string): boolean {
   const t = text.trim();

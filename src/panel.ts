@@ -1,4 +1,5 @@
 import { Menu, setIcon } from "obsidian";
+import { KeyAction } from "./keys";
 import { STRUCTURES, Structure } from "./model";
 import { Theme, colorsOf, themeName, themeOptions } from "./styles";
 
@@ -25,6 +26,7 @@ export interface PanelActions {
   setTheme: (t: Theme) => void;
   toggleAutoAlign: () => void;
   togglePause: () => void;
+  shortcut: (...actions: KeyAction[]) => string; // the actions' shortcuts as the user reads them, "" when they have none
 }
 
 export interface PanelState {
@@ -90,6 +92,7 @@ type Key =
 export class FloatingPanel {
   readonly el: HTMLElement;
   private readonly buttons = new Map<Key, HTMLButtonElement>();
+  private readonly labels = new Map<Key, () => string>(); // of the buttons whose label names a shortcut
   private state: PanelState | null = null;
   private position: PanelPosition = "bottom";
   private style: PanelStyle = "default";
@@ -97,8 +100,10 @@ export class FloatingPanel {
   constructor(private readonly a: PanelActions, compact: boolean) {
     this.el = createDiv({ cls: "mm-panel mm-pos-bottom mm-style-default" });
     const group = () => this.el.createDiv({ cls: "mm-group" });
-    const button = (g: HTMLElement, key: Key, icon: string, label: string, fn: (b: HTMLButtonElement) => void) => {
-      const b = g.createEl("button", { cls: "mm-btn clickable-icon", attr: { "aria-label": label } });
+    const button = (g: HTMLElement, key: Key, icon: string, label: string | (() => string), fn: (b: HTMLButtonElement) => void) => {
+      const b = g.createEl("button", { cls: "mm-btn clickable-icon" });
+      if (typeof label === "string") b.setAttr("aria-label", label);
+      else this.labels.set(key, label);
       setIcon(b, icon);
       // Keep focus on the canvas (or on the text editor) so keyboard control keeps working.
       b.addEventListener("mousedown", (e) => e.preventDefault());
@@ -112,28 +117,34 @@ export class FloatingPanel {
     const g1 = group();
     button(g1, "newMap", "network", "New mind map", a.newMap);
     const g2 = group();
-    button(g2, "child", "corner-down-right", "Add child (Tab / Insert)", a.addChild);
-    button(g2, "sibling", "plus", "Add sibling (Enter)", a.addSibling);
+    const hinted = (label: string, ...actions: KeyAction[]) => () => withHint(label, a.shortcut(...actions));
+    button(g2, "child", "corner-down-right", hinted("Add child", "addChild"), a.addChild);
+    button(g2, "sibling", "plus", hinted("Add sibling", "addSibling"), a.addSibling);
     button(g2, "summary", "braces", "Add summary of the selected topics", a.addSummary);
     button(g2, "boundary", "square-dashed", "Add boundary around the selected topics", a.addBoundary);
     button(g2, "relation", "spline", "Add relationship from the first to the second selected topic or boundary", a.addRelationship);
     if (!compact) button(g2, "callout", "message-square", "Add callout, a note above the topic", a.addCallout);
     if (!compact) button(g2, "highlight", "highlighter", "Highlight", a.toggleHighlight);
-    button(g2, "edit", "pencil", "Edit text (F2 / Space)", a.edit);
-    button(g2, "remove", "trash-2", "Delete with subtopics (Delete)", a.remove);
+    button(g2, "edit", "pencil", hinted("Edit text", "edit"), a.edit);
+    button(g2, "remove", "trash-2", hinted("Delete with subtopics", "remove"), a.remove);
     if (compact) {
       button(group(), "more", "more-horizontal", "More", (b) => this.showMenu(this.moreMenu(), b));
+      this.refreshLabels();
       return;
     }
     const gc = group();
     button(gc, "copy", "copy", "Copy as Markdown (Ctrl+C)", a.copy);
     button(gc, "paste", "clipboard-paste", "Paste Markdown as subtopics (Ctrl+V), or as a new map with nothing selected", a.paste);
-    button(gc, "duplicate", "copy-plus", "Duplicate with subtopics (Ctrl+D)", a.duplicate);
+    button(gc, "duplicate", "copy-plus", hinted("Duplicate with subtopics", "duplicate"), a.duplicate);
     const gl = group();
-    button(gl, "promote", "indent-decrease", "Promote to the parent's level (Alt+arrow toward the central topic)", a.promote);
-    button(gl, "demote", "indent-increase", "Demote under the topic above (Alt+arrow away from the central topic)", a.demote);
+    const level = (label: string, way: string) => () => {
+      const keys = a.shortcut("levelLeft", "levelRight");
+      return keys ? `${label} (${keys} ${way} the central topic)` : label;
+    };
+    button(gl, "promote", "indent-decrease", level("Promote to the parent's level", "toward"), a.promote);
+    button(gl, "demote", "indent-increase", level("Demote under the topic above", "away from"), a.demote);
     const g4 = group();
-    button(g4, "fold", "chevrons-down-up", "Collapse (Ctrl+/)", a.toggleFold);
+    button(g4, "fold", "chevrons-down-up", () => withHint(this.state?.collapsed ? "Expand" : "Collapse", a.shortcut("toggleFold")), a.toggleFold);
     button(g4, "layout", "sliders-horizontal", "Layout settings", (b) => {
       const menu = new Menu();
       this.layoutItems(menu);
@@ -145,6 +156,12 @@ export class FloatingPanel {
       this.showMenu(menu, b);
     });
     button(group(), "pause", "pause", "", a.togglePause);
+    this.refreshLabels();
+  }
+
+  /** Labels the buttons with their shortcuts, again after the user changes them. */
+  refreshLabels() {
+    for (const [k, label] of this.labels) this.buttons.get(k)?.setAttr("aria-label", label());
   }
 
   /** The themes, the presets and then the user's own, the one of the selected topic's map checked. */
@@ -274,7 +291,7 @@ export class FloatingPanel {
     if (fold && fold.dataset.collapsed !== String(s.collapsed)) {
       fold.dataset.collapsed = String(s.collapsed);
       setIcon(fold, s.collapsed ? "chevrons-up-down" : "chevrons-down-up");
-      fold.setAttr("aria-label", s.collapsed ? "Expand (Ctrl+/)" : "Collapse (Ctrl+/)");
+      fold.setAttr("aria-label", this.labels.get("fold")!());
     }
   }
 
@@ -283,3 +300,5 @@ export class FloatingPanel {
     this.el.remove();
   }
 }
+
+const withHint = (label: string, hint: string) => (hint ? `${label} (${hint})` : label);
