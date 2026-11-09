@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { El } from "../src/excalidraw.ts";
-import { KEY, balancedSplit, boundaryData, buildMap, calloutData, isHidden, nodeData, orderLine, rangesIn, rootIdOf, structureOf, titleData } from "../src/model.ts";
+import type { Structure } from "../src/model.ts";
+import { KEY, balancedSplit, boundaryData, buildMap, calloutData, isHidden, nodeData, orderLine, rangesIn, rootIdOf, structureOf, switchedOrder, titleData, twoSided } from "../src/model.ts";
 
 const el = (id: string, data: object, extra: Partial<El> = {}): El =>
   ({ id, type: "rectangle", x: 0, y: 0, width: 10, height: 10, customData: { [KEY]: data }, ...extra });
@@ -169,4 +170,66 @@ test("a callout without its topic, a second one, one on a summary and a tail wit
   const map = buildMap(els, "r")!;
   assert.deepEqual([...map.callouts.keys()], ["a"]);
   assert.deepEqual(map.strayCallouts.map((e) => e.id).sort(), ["c2", "c3", "c4", "t"]);
+});
+
+// ---------- switching structures ----------
+
+const mapOf = (structure: Structure, mains: [string, "R" | "L"][]) => [
+  el("r", { self: "r", root: "r", parent: null, order: 0, structure }),
+  ...mains.map(([id, side], order) => el(id, { self: id, root: "r", parent: "r", order, side })),
+  el("a1", { self: "a1", root: "r", parent: mains[0][0], order: 0 }),
+];
+
+/**
+ * What setStructure stores: the layout of a two-sided map keeps each main topic's side,
+ * then the main topics get their new order and the central topic the new structure.
+ */
+function switchTo(els: El[], to: Structure): El[] {
+  const map = buildMap(els, "r")!;
+  const sided = twoSided(structureOf(map.root));
+  const order = new Map(switchedOrder(map.root, to).map((n, i) => [n.id, i]));
+  return els.map((e) => {
+    const d = nodeData(e)!;
+    if (e.id === "r") return { ...e, customData: { [KEY]: { ...d, structure: to } } };
+    if (!order.has(e.id)) return e;
+    return { ...e, customData: { [KEY]: { ...d, order: order.get(e.id), ...(sided ? { side: map.nodes.get(e.id)!.side } : {}) } } };
+  });
+}
+
+/** The main topics as shown: the right side top to bottom, then the left; and what hangs under them. */
+const mainsShown = (els: El[]) =>
+  buildMap(els, "r")!.root.children.map((c) => `${c.id}:${c.side}${c.children.length ? `(${c.children.map((k) => k.id)})` : ""}`);
+
+const ONE_SIDED: Structure[] = ["right", "left"];
+
+test("a balanced map switched to another structure and back looks as it did", () => {
+  const start = mapOf("balanced", [["a", "R"], ["b", "R"], ["c", "L"], ["d", "L"], ["e", "L"]]);
+  assert.deepEqual(mainsShown(start), ["a:R(a1)", "b:R", "c:R", "e:L", "d:L"]);
+  for (const to of ["free", ...ONE_SIDED] as Structure[])
+    assert.deepEqual(mainsShown(switchTo(switchTo(start, to), "balanced")), mainsShown(start), `through ${to}`);
+});
+
+test("a free map switched to a one-sided structure and back keeps every main topic on its side", () => {
+  const start = mapOf("free", [["a", "R"], ["b", "L"], ["c", "R"], ["d", "R"], ["e", "L"]]);
+  assert.deepEqual(mainsShown(start), ["a:R(a1)", "c:R", "d:R", "b:L", "e:L"]);
+  for (const to of ONE_SIDED) assert.deepEqual(mainsShown(switchTo(switchTo(start, to), "free")), mainsShown(start), `through ${to}`);
+});
+
+test("switching between one-sided structures and back keeps the order", () => {
+  const start = mapOf("right", [["a", "R"], ["b", "R"], ["c", "R"]]);
+  assert.deepEqual(mainsShown(switchTo(switchTo(start, "left"), "right")), mainsShown(start));
+});
+
+test("a map switched to another structure shows its main topics in the order they were shown", () => {
+  // A balanced map turned one-sided reads clockwise from the top right.
+  const balanced = mapOf("balanced", [["a", "R"], ["b", "R"], ["c", "L"], ["d", "L"]]);
+  assert.deepEqual(mainsShown(switchTo(balanced, "right")), ["a:R(a1)", "b:R", "c:R", "d:R"]);
+  // Turned free, each side stays as it was.
+  assert.deepEqual(mainsShown(switchTo(balanced, "free")), mainsShown(balanced));
+  // A free map keeps each side top to bottom, its right side first.
+  const free = mapOf("free", [["a", "R"], ["b", "L"], ["c", "R"]]);
+  assert.deepEqual(mainsShown(switchTo(free, "left")), ["a:L(a1)", "c:L", "b:L"]);
+  // A one-sided map turned balanced runs clockwise from the top right in the order it showed, also from the left.
+  const left = mapOf("left", [["a", "L"], ["b", "L"], ["c", "L"], ["d", "L"]]);
+  assert.deepEqual(mainsShown(switchTo(left, "balanced")), ["a:R(a1)", "b:R", "d:L", "c:L"]);
 });

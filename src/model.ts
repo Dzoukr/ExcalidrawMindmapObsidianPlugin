@@ -248,6 +248,20 @@ export const autoAligned = (root: NodeData): boolean => root.autoAlign === true;
 /** Whether the main topics go on both sides of the central topic. */
 export const twoSided = (s: Structure) => s === "balanced" || s === "free";
 
+/**
+ * The main topics in the order a map switching to the structure gives them, so they keep the order they are
+ * shown in and switching back gives the same map. A balanced map reads clockwise from the top right, and a
+ * one-sided map it turns into takes that order. A free map keeps each topic on its side, top to bottom; turning
+ * into a balanced map, its left side, read upward, follows the right. A one-sided map reads top to bottom.
+ */
+export function switchedOrder(root: MMNode, to: Structure): MMNode[] {
+  const from = structureOf(root);
+  const right = root.children.filter((c) => c.side === "R");
+  const left = root.children.filter((c) => c.side === "L");
+  const clockwise = from === "balanced" ? to !== "free" : to === "balanced" && twoSided(from);
+  return clockwise ? [...right, ...left.reverse()] : [...right, ...left];
+}
+
 export const byOrder = (a: MMNode, b: MMNode) => a.data.order - b.data.order;
 
 /**
