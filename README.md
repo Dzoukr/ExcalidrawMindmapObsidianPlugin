@@ -93,6 +93,27 @@ The panel comes in several styles, chosen in the settings: **Default** like Obsi
 
 Maps are ordinary Excalidraw elements, so every Excalidraw tool still works on them. Every operation is a single undo step. Pause the plugin from the panel, or with the command "Pause or resume mind map editing", when you want Excalidraw's own shortcuts back.
 
+### 🤝 Next to other diagram plugins
+
+Other plugins may draw their own kind of diagram in Excalidraw drawings too. Each drawing belongs to one of them, so their panels, keys and double-clicks never get in each other's way. The plugins need not know each other, only conventions they all follow (`src/mode.ts`):
+
+- **The drawing's kind is in its frontmatter**: `dzoukr-diagram-kind: mindmap` for a mind map drawing, out of the `excalidraw-` keys the Excalidraw plugin keeps for itself. This plugin writes it when it takes a drawing over, and leaves a drawing of another kind alone.
+- **A registry on the window**: the map `window.dzoukrDiagramKinds` holds, for the kind of each such plugin while it is enabled, the version of these conventions it follows (`{ version: 1 }`). The conventions only change in ways plugins following an earlier version still work with; a change they would not work with raises the version.
+- **A shared chooser row** (`src/chooser.ts`): on a drawing nobody's yet, each plugin puts one `button.dzoukr-diagram-choice` (its kind in `data-kind`) into the `div.dzoukr-diagram-chooser` of the view, "Use this drawing for: Mind map · …", made by the first and removed by the last, all styling it alike; its own panel is hidden there. Last in the row, **Excalidraw** keeps the drawing plain: it writes the kind `excalidraw`, which every plugin leaves alone as it does any kind not its own. Whichever plugin offers first adds that button, and takes it out when it leaves.
+
+| Drawing | Mind map plugin alone | With another such plugin |
+|---|---|---|
+| Kind `mindmap` | the mind map's: the whole panel | the mind map's: the whole panel |
+| Another kind | panel hidden, plugin silent | panel hidden, plugin silent |
+| No kind, with mind map topics | the mind map's; the kind is written | the mind map's; the kind is written |
+| No kind, anything else (empty included) | the mind map's, as before | nobody's: no panel, a **Mind map** button in a row shared with the other plugins, keys left to Excalidraw |
+
+- The **Mind map** button in the row "Use this drawing for", the command "Use this drawing for mind maps", or any mind map command on a drawing nobody's yet takes it over: its kind is written. The command also takes over another plugin's drawing; what that plugin drew stays as plain shapes.
+- The command "Keep this drawing plain Excalidraw" does the same as the **Excalidraw** button, on any drawing, a mind map one included (its topics stay as plain shapes).
+- The kind of a drawing with mind map topics and none is written once its first topic is drawn, or when one drawn before kinds is open; only while the drawing has no unsaved changes.
+- Silent means: no keys, clipboard, text fitting, drop targets, fold badges, highlights, or following relationships and callouts. Mind map commands are not offered on another plugin's drawing.
+- Pause stays as it is, for every drawing, and only matters on the mind map's own.
+
 ## Configuration
 
 All options are in **Settings → Excalidraw Mind Map**.

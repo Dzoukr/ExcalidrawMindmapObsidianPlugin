@@ -14,7 +14,9 @@ import {
   parseShortcut, sameShortcuts, shortcutOf, typesText,
 } from "./keys";
 import { AppState, El, ExcalidrawAPI, ExcalidrawView, VIEW_TYPE_EXCALIDRAW, isExcalidrawView } from "./excalidraw";
-import { STRUCTURES, Structure, calloutData, isStructure, nodeData, titleData } from "./model";
+import { KEY, STRUCTURES, Structure, calloutData, isStructure, nodeData, titleData } from "./model";
+import { MODE, MODE_KEY, Owner, isAlone, ownerOf, register } from "./mode";
+import { PLAIN, offer, withdraw } from "./chooser";
 import { isOutline } from "./outline";
 import { FloatingPanel, PANEL_POSITIONS, PANEL_STYLES, PanelActions, PanelPosition, PanelStyle, isPanelPosition, isPanelStyle, themeTitle } from "./panel";
 import {
@@ -79,6 +81,11 @@ interface ViewState {
   raf: number;
   badge: string | null; // topic whose fold badge was clicked, so the click unfolds it once
   drop: HTMLElement; // outline of the topic a dragged topic becomes a subtopic of when dropped
+  file: ExcalidrawView["file"]; // the drawing the fields below are about; the view may open another one
+  ownElements?: boolean; // the drawing has mind map elements in it, until the scene changes
+  claimed?: boolean; // taken over for mind maps, until the frontmatter says so
+  plain?: boolean; // kept plain Excalidraw, until the frontmatter says so
+  keyWritten?: boolean; // the drawing's kind was written to its frontmatter
 }
 
 const SELECT: [KeyAction, Direction][] = [["selectUp", "up"], ["selectDown", "down"], ["selectLeft", "left"], ["selectRight", "right"]];
@@ -96,7 +103,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private scopePushed = false;
   // A key reaches both the scope and the window listener: the second one leaves a key the first one took.
   private handled = new WeakSet<KeyboardEvent>();
-  // While paused, keys and text edits are left to Excalidraw. Not saved: a restart resumes.
+  // While paused, keys and text edits are left to Excalidraw. Not saved: a restart resumes. It only matters on the
+  // drawings that are the mind map's: the plugin leaves the others alone anyway.
   private paused = false;
   private pointerDown = false;
 
@@ -104,6 +112,17 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.settings = mergeSettings((await this.loadData()) as Partial<Settings> | null);
     this.applySettings();
     this.addSettingTab(new MindMapSettingTab(this.app, this));
+
+    // Other plugins drawing their own kind of diagram find this one here, and leave its drawings alone.
+    this.register(register());
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => {
+      for (const s of this.states.values()) {
+        if (s.view.file !== file) continue;
+        s.claimed = false;
+        s.plain = false;
+        this.refreshPanel(s);
+      }
+    }));
 
     this.keyScope = new Scope(this.app.scope);
     this.registerScopeKeys();
@@ -132,6 +151,26 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
       this.syncKeyScope();
     });
 
+    this.addCommand({
+      id: "use-for-mind-maps",
+      name: "Use this drawing for mind maps",
+      checkCallback: (checking) => {
+        const v = this.activeView();
+        if (!v || this.ownerOfView(v) === "mine") return false;
+        if (!checking) void this.claim(v);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "keep-plain",
+      name: "Keep this drawing plain Excalidraw",
+      checkCallback: (checking) => {
+        const v = this.activeView();
+        if (!v || this.kindOf(v) === PLAIN) return false;
+        if (!checking) void this.keepPlain(v);
+        return true;
+      },
+    });
     this.addCommand({
       id: "toggle-pause",
       name: "Pause or resume mind map editing",
@@ -287,11 +326,110 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     return isExcalidrawView(v) && v.excalidrawAPI ? v : null;
   }
 
+  /**
+   * Runs the command on the active drawing; a command is only offered while one is open and the drawing is not another
+   * plugin's. On a drawing nobody's yet, it takes the drawing over for mind maps.
+   */
   private withActiveView(checking: boolean, fn: (v: ExcalidrawView) => unknown): boolean {
     const v = this.activeView();
     if (!v) return false;
-    if (!checking) fn(v);
+    const owner = this.ownerOfView(v);
+    if (owner === "other") return false;
+    if (!checking) {
+      if (owner === "none") void this.claim(v);
+      fn(v);
+    }
     return true;
+  }
+
+  // ---------- whose drawing ----------
+
+  /** Whom the drawing belongs to: the mind map, another plugin drawing its own kind of diagram, or none yet. */
+  private ownerOfView(view: ExcalidrawView): Owner {
+    const s = this.states.get(view);
+    if (s && s.file !== view.file) {
+      // The view opened another drawing.
+      s.file = view.file;
+      s.ownElements = s.claimed = s.plain = s.keyWritten = undefined;
+    }
+    if (s?.plain) return "other";
+    if (s?.claimed) return "mine";
+    const kind = this.kindOf(view);
+    const alone = isAlone();
+    // The elements are looked at only when they can make a difference: no kind, and another plugin of the sort enabled.
+    const hasKind = typeof kind === "string" && !!kind.trim();
+    return ownerOf(kind, !hasKind && !alone && this.hasOwnElements(view), alone);
+  }
+
+  /** The kind in the drawing's frontmatter, if any. */
+  private kindOf(view: ExcalidrawView): unknown {
+    return view.file ? this.app.metadataCache.getFileCache(view.file)?.frontmatter?.[MODE_KEY] : undefined;
+  }
+
+  /** Whether the drawing has mind map elements in it; kept until its scene changes. */
+  private hasOwnElements(view: ExcalidrawView): boolean {
+    const s = this.states.get(view);
+    if (s) return (s.ownElements ??= hasOwnElements(s.api.getSceneElements()));
+    return hasOwnElements(view.excalidrawAPI?.getSceneElements() ?? []);
+  }
+
+  private isMine(view: ExcalidrawView): boolean {
+    return this.ownerOfView(view) === "mine";
+  }
+
+  /** Whether the plugin leaves the drawing to Excalidraw: paused, or the drawing is not the mind map's. */
+  private silent(view: ExcalidrawView): boolean {
+    return this.paused || !this.isMine(view);
+  }
+
+  /** Takes the drawing over for mind maps: its frontmatter says so, for this plugin and the others. */
+  private async claim(view: ExcalidrawView) {
+    const s = this.states.get(view);
+    if (s) {
+      s.claimed = true;
+      s.plain = false;
+      this.refreshPanel(s);
+    }
+    await this.writeKind(view);
+  }
+
+  /** Leaves the drawing to Excalidraw: its frontmatter says it is plain, so neither this plugin nor the others take it. */
+  private async keepPlain(view: ExcalidrawView) {
+    const s = this.states.get(view);
+    if (s) {
+      s.claimed = false;
+      s.plain = true;
+      this.refreshPanel(s);
+    }
+    await this.writeKind(view, PLAIN);
+  }
+
+  /** Writes the drawing's kind to its frontmatter; false when it could not. */
+  private async writeKind(view: ExcalidrawView, kind: string = MODE): Promise<boolean> {
+    if (!view.file) return false;
+    try {
+      await this.app.fileManager.processFrontMatter(view.file, (fm: Record<string, unknown>) => {
+        fm[MODE_KEY] = kind;
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Writes the kind of a mind map drawing to its frontmatter when it has none, for the other plugins drawing their own
+   * kind of diagram to leave it alone: once its first topic is drawn, or when one drawn before kinds is open. Only when
+   * the drawing has no unsaved changes, which writing the file under it could interfere with.
+   */
+  private keepKind(s: ViewState) {
+    if (s.keyWritten || !s.view.file || !this.isMine(s.view)) return;
+    if (this.app.metadataCache.getFileCache(s.view.file)?.frontmatter?.[MODE_KEY]) return void (s.keyWritten = true);
+    if (!this.hasOwnElements(s.view) || (s.view as { isDirty?: () => boolean }).isDirty?.()) return;
+    s.keyWritten = true;
+    void this.writeKind(s.view).then((ok) => {
+      if (!ok) s.keyWritten = false;
+    });
   }
 
   // ---------- view tracking ----------
@@ -300,7 +438,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private syncKeyScope() {
     const view = this.activeView();
     const active =
-      !this.paused && !!view && !view.excalidrawAPI!.getAppState().editingTextElement &&
+      !!view && !this.silent(view) && !view.excalidrawAPI!.getAppState().editingTextElement &&
       (!!selectedNode(view) || !!selectedBoundary(view) || !!selectedCallout(view));
     if (active && !this.scopePushed) this.app.keymap.pushScope(this.keyScope);
     if (!active && this.scopePushed) this.app.keymap.popScope(this.keyScope);
@@ -350,16 +488,18 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
     const s: ViewState = {
       view, api, panel: new FloatingPanel(this.panelActions(view), Platform.isMobile), editing: null, fit: null, pending: null, raf: 0, badge: null,
-      drop: createDiv({ cls: "mm-drop-target mm-hidden" }),
+      drop: createDiv({ cls: "mm-drop-target mm-hidden" }), file: view.file,
     };
     s.panel.mount(view.contentEl);
     s.unsubscribe = api.onChange?.((_els, appState) => this.onSceneChange(s, appState));
     this.states.set(view, s);
     this.refreshPanel(s);
+    this.keepKind(s);
   }
 
   private detach(s: ViewState) {
     s.unsubscribe?.();
+    withdraw(s.view.contentEl, MODE);
     if (s.raf) window.cancelAnimationFrame(s.raf);
     if (s.fit) endTextFit(s.fit);
     s.fit = null;
@@ -368,6 +508,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   }
 
   private onSceneChange(s: ViewState, appState: AppState) {
+    s.ownElements = undefined;
     const editing: El | null = appState.editingTextElement ?? null;
     if (s.editing && !editing) {
       const containerId = s.editing.containerId;
@@ -381,7 +522,8 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
         s.raf = 0;
         this.checkBadge(s);
         this.fitText(s);
-        if (!this.paused && !s.api.getAppState().editingTextElement) {
+        this.keepKind(s);
+        if (!this.silent(s.view) && !s.api.getAppState().editingTextElement) {
           followRelations(s.view);
           followCallouts(s.view);
           followHalos(s.view);
@@ -394,14 +536,14 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
   /** Clicking a fold badge selects it: expand its topic, like XMind's expand button. */
   private checkBadge(s: ViewState) {
-    const node = this.paused || s.api.getAppState().viewModeEnabled ? null : selectedBadge(s.view);
+    const node = this.silent(s.view) || s.api.getAppState().viewModeEnabled ? null : selectedBadge(s.view);
     if (node && node !== s.badge) void unfold(s.view, node);
     s.badge = node;
   }
 
   /** While topics are dragged, outlines the topic they become subtopics of when dropped now. */
   private showDropTarget(s: ViewState) {
-    const box = this.pointerDown && !this.paused ? dropTargetBox(s.view) : null;
+    const box = this.pointerDown && !this.silent(s.view) ?dropTargetBox(s.view) : null;
     const canvas = s.view.contentEl.querySelector(".excalidraw");
     s.drop.toggleClass("mm-hidden", !box || !canvas);
     if (!box || !canvas) return;
@@ -423,7 +565,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private afterEdit(s: ViewState, containerId: string) {
     const pending = s.pending;
     s.pending = null;
-    if (this.paused) return;
+    if (this.silent(s.view)) return;
     const el = s.api.getSceneElements().find((e) => e.id === containerId);
     if (!nodeData(el) && !titleData(el) && !calloutData(el)) return;
     // A callout edited to nothing goes, like an empty text in Excalidraw.
@@ -434,7 +576,13 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
 
   private refreshPanel(s: ViewState) {
     if (s.view === this.activeView()) this.syncKeyScope();
-    const visible = (Platform.isMobile || this.settings.showPanelOnDesktop) && !s.api.getAppState().viewModeEnabled;
+    // Only on the mind map's own drawings. On a drawing nobody's yet, a button taking it over instead, in the row the
+    // plugins drawing their own kind of diagram share.
+    const owner = this.ownerOfView(s.view);
+    const viewMode = !!s.api.getAppState().viewModeEnabled;
+    const visible = (Platform.isMobile || this.settings.showPanelOnDesktop) && !viewMode && owner === "mine";
+    if (owner === "none" && !viewMode) offer(s.view.contentEl, MODE, "Mind map", "Use this drawing for mind maps", () => void this.claim(s.view), () => void this.keepPlain(s.view));
+    else withdraw(s.view.contentEl, MODE);
     s.panel.setVisible(visible);
     s.panel.setPosition(this.settings.panelPosition);
     s.panel.setStyle(this.settings.panelStyle);
@@ -604,7 +752,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
    * only once per edit.
    */
   private fitText(s: ViewState) {
-    const editing = this.paused ? null : s.api.getAppState().editingTextElement;
+    const editing = this.silent(s.view) ? null : s.api.getAppState().editingTextElement;
     if (s.fit && s.fit.textId !== editing?.id) {
       endTextFit(s.fit);
       s.fit = null;
@@ -621,7 +769,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
   private onClipboard = (e: ClipboardEvent) => {
     if (this.paused || !e.isTrusted || !e.clipboardData) return;
     const view = this.activeView();
-    if (!view) return;
+    if (!view || !this.isMine(view)) return;
     const target = e.target as HTMLElement;
     if (!view.containerEl.contains(target) && target !== target.ownerDocument?.body) return;
     if (target.isContentEditable || target.instanceOf(HTMLInputElement) || target.instanceOf(HTMLTextAreaElement)) return;
@@ -681,7 +829,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     this.pointerDown = false;
     for (const s of this.states.values()) s.drop.addClass("mm-hidden");
     const view = this.activeView();
-    if (this.paused || !view) return;
+    if (!view || this.silent(view)) return;
     window.setTimeout(() => {
       const st = view.excalidrawAPI?.getAppState();
       if (st && !st.viewModeEnabled && !st.editingTextElement) afterDrag(view);
@@ -699,7 +847,7 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (this.handled.has(e)) return true;
     if (this.paused || !e.isTrusted || e.isComposing) return false; // our own replayed keys pass through to Excalidraw
     const view = this.activeView();
-    if (!view) return false;
+    if (!view || !this.isMine(view)) return false;
     const target = e.target as HTMLElement;
     if (!view.containerEl.contains(target) && target !== target.ownerDocument?.body) return false;
     const appState = view.excalidrawAPI!.getAppState();
@@ -776,6 +924,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     return dir ? onNode((id) => navigate(view, id, dir)) : null;
   }
 }
+
+/** Whether a drawing has anything of a mind map in it. */
+const hasOwnElements = (els: readonly El[]): boolean => els.some((e) => !e.isDeleted && !!e.customData?.[KEY]);
 
 class StructureModal extends FuzzySuggestModal<Structure> {
   constructor(app: App, private current: Structure | null, private choose: (s: Structure) => void) {

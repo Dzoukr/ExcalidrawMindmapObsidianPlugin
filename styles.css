@@ -264,3 +264,41 @@ body.is-phone .mm-btn svg {
 .mm-drop-target.mm-hidden {
   display: none;
 }
+
+/* On a drawing nobody's yet, the row where each plugin drawing its own kind of diagram offers to take it over. Shared
+   by those plugins, which all style it with these same rules (see src/chooser.ts). */
+.dzoukr-diagram-chooser {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 60px;
+  margin-inline: auto;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 4px 4px 10px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+}
+
+.dzoukr-diagram-chooser-label {
+  color: var(--text-muted);
+}
+
+.dzoukr-diagram-choice {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.dzoukr-diagram-choice[data-kind="excalidraw"] {
+  font-weight: var(--font-normal);
+  color: var(--text-muted);
+}

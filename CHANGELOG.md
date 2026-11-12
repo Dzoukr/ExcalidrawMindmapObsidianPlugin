@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.0
+
+### New
+
+- **Next to other diagram plugins.** A drawing belongs to one plugin drawing its own kind of diagram in Excalidraw, so their panels and keys don't collide. Its kind is in its frontmatter, `dzoukr-diagram-kind: mindmap` for mind maps, and the plugins enabled find each other in `window.dzoukrDiagramKinds` with the version of these conventions they follow; the conventions only change in ways older plugins still work with, and an incompatible change raises the version. On a drawing of another kind the panel is hidden and the plugin stays out of the way. With another such plugin enabled, a drawing that has no kind and no topics shows no panel, only a **Mind map** button in a row the plugins share; it, the command "Use this drawing for mind maps" or any mind map command takes the drawing over. The row's **Excalidraw** button, or the command "Keep this drawing plain Excalidraw" on any drawing, keeps it plain: its kind becomes `excalidraw`, which every such plugin leaves alone. Drawings with mind maps get the kind written when opened. Alone, the plugin works in every drawing as before.
+
 ## 1.7.0
 
 ### Changed
