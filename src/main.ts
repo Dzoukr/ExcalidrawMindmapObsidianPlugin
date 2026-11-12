@@ -35,12 +35,13 @@ interface Settings {
   theme: Theme; // of new maps
   themes: UserTheme[]; // the user's own, after the presets
   shortcuts: Shortcuts;
+  askKind: boolean; // ask what a drawing nobody's yet is for, even with no other plugin drawing its own kind of diagram
 }
 
 const DEFAULT_SETTINGS: Settings = {
   showPanelOnDesktop: true, panelPosition: "bottom", panelStyle: "default", allowDeleteCentralTopic: false, arrows: false, structure: "balanced", autoAlign: true,
   theme: CUSTOM_THEME, themes: [{ id: CUSTOM_THEME, name: "Custom", colors: DEFAULT_COLORS }],
-  shortcuts: DEFAULT_SHORTCUTS,
+  shortcuts: DEFAULT_SHORTCUTS, askKind: false,
 };
 
 /**
@@ -61,6 +62,7 @@ function mergeSettings(saved: (Partial<Settings> & { colors?: unknown }) | null)
   if (!isPanelStyle(merged.panelStyle)) merged.panelStyle = DEFAULT_SETTINGS.panelStyle;
   merged.theme = validTheme(merged.theme, merged.themes);
   merged.shortcuts = mergeShortcuts(saved?.shortcuts);
+  merged.askKind = merged.askKind === true;
   return merged;
 }
 
@@ -355,8 +357,9 @@ export default class ExcalidrawMindMapPlugin extends Plugin {
     if (s?.plain) return "other";
     if (s?.claimed) return "mine";
     const kind = this.kindOf(view);
-    const alone = isAlone();
-    // The elements are looked at only when they can make a difference: no kind, and another plugin of the sort enabled.
+    // Asked to, the plugin asks what a drawing nobody's yet is for even when it is the only one of its sort.
+    const alone = isAlone() && !this.settings.askKind;
+    // The elements are looked at only when they can make a difference: no kind, and not taking every drawing anyway.
     const hasKind = typeof kind === "string" && !!kind.trim();
     return ownerOf(kind, !hasKind && !alone && this.hasOwnElements(view), alone);
   }
@@ -1057,6 +1060,11 @@ class MindMapSettingTab extends PluginSettingTab {
         name: "Allow deleting the central topic",
         desc: "Deleting the central topic removes the whole mind map: every topic and connector. A central topic with no other topics can be deleted either way.",
         control: { type: "toggle", key: "allowDeleteCentralTopic" },
+      },
+      {
+        name: "Ask what a new drawing is for",
+        desc: "On a drawing without mind maps that is not yet anybody's, offer mind maps or plain Excalidraw instead of taking it over. With another plugin drawing its own kind of diagram enabled, the plugins always ask.",
+        control: { type: "toggle", key: "askKind" },
       },
       {
         name: "Structure of new maps",

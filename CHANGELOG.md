@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.0
+
+### New
+
+- **Ask what a new drawing is for**, a setting, off by default: on, the plugin asks even when it is alone. A drawing with no kind and no topics shows the row "Use this drawing for: Mind map · Excalidraw" instead of the panel.
+
 ## 1.8.0
 
 ### New

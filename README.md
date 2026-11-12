@@ -106,13 +106,14 @@ Other plugins may draw their own kind of diagram in Excalidraw drawings too. Eac
 | Kind `mindmap` | the mind map's: the whole panel | the mind map's: the whole panel |
 | Another kind | panel hidden, plugin silent | panel hidden, plugin silent |
 | No kind, with mind map topics | the mind map's; the kind is written | the mind map's; the kind is written |
-| No kind, anything else (empty included) | the mind map's, as before | nobody's: no panel, a **Mind map** button in a row shared with the other plugins, keys left to Excalidraw |
+| No kind, anything else (empty included) | the mind map's, as before; nobody's with **Ask what a new drawing is for** on | nobody's: no panel, a **Mind map** button in a row shared with the other plugins, keys left to Excalidraw |
 
 - The **Mind map** button in the row "Use this drawing for", the command "Use this drawing for mind maps", or any mind map command on a drawing nobody's yet takes it over: its kind is written. The command also takes over another plugin's drawing; what that plugin drew stays as plain shapes.
 - The command "Keep this drawing plain Excalidraw" does the same as the **Excalidraw** button, on any drawing, a mind map one included (its topics stay as plain shapes).
 - The kind of a drawing with mind map topics and none is written once its first topic is drawn, or when one drawn before kinds is open; only while the drawing has no unsaved changes.
 - Silent means: no keys, clipboard, text fitting, drop targets, fold badges, highlights, or following relationships and callouts. Mind map commands are not offered on another plugin's drawing.
 - Pause stays as it is, for every drawing, and only matters on the mind map's own.
+- With the setting **Ask what a new drawing is for** on, the plugin asks even when it is alone: a drawing with no kind and no topics shows the row "Use this drawing for: Mind map · Excalidraw" instead of the panel. Drawings with topics or a kind are not affected.
 
 ## Configuration
 
@@ -124,6 +125,7 @@ All options are in **Settings → Excalidraw Mind Map**.
 | Control panel position | Bottom | A row at the bottom or top of the drawing, or a column on its left or right side. On phones, Bottom shows it at the top, clear of Excalidraw's own toolbars. |
 | Control panel style | Default | How the panel looks: Default, Accent color, High contrast, Translucent or Colorful icons. |
 | Allow deleting the central topic | Off | Lets Delete remove the central topic, which deletes the whole map: every topic and connector. A central topic with no other topics can be deleted either way. |
+| Ask what a new drawing is for | Off | On a drawing without mind maps that is not yet anybody's, offers mind maps or plain Excalidraw instead of taking it over. With another plugin drawing its own kind of diagram enabled, the plugins always ask. |
 | Structure of new maps | Balanced | How main topics are placed around the central topic: balanced, free, right or left. Each map keeps its own. |
 | Auto-align new maps | On | Topics keep their automatic places and a drop moves a topic among its siblings, instead of leaving it where it is dropped. Each map keeps its own. |
 | Theme of new maps | Custom | The colors of new maps: a built-in theme or one of your own. Each map keeps its own. |
