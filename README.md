@@ -45,6 +45,8 @@ Each map has its own structure, chosen from the panel's layout settings or with 
 - **Free**: each main topic stays on the side you put it on. Drag a main topic across the central topic to move it to the other side; it stays there.
 - **Right** and **Left**: all main topics on one side.
 
+Changing the structure keeps the main topics in the order they are shown, clockwise in a balanced map, and each main topic remembers its side: switch back and the map looks as it did. Topics you moved by hand go back to their automatic places, and a free map switched to balanced takes the sides balanced gives it.
+
 New maps get the structure set in the settings. Maps made before version 1.2 are free.
 
 ### 🧩 Summaries, boundaries and relationships

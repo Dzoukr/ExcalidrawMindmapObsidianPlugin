@@ -7,7 +7,7 @@ import {
 import {
   HIDDEN_KEY, HiddenState, KEY, autoAligned, MMBadge, MMBoundary, MMCallout, MMNode, MMSummary, MindMap, NodeData, PlainLook, RelationData, Structure, badgeData, balancedSplit, byOrder,
   boundTextId, boundaryData, braceData, buildMap, calloutData, edgeData, hiddenState, isHidden, isRelationLabel, nodeData, orderLine, rangesIn, relationData,
-  resolveNodeElement, rootIdOf, structureIn, structureOf, subtree, tailData, titleData, twoSided,
+  resolveNodeElement, rootIdOf, structureIn, structureOf, subtree, switchedOrder, tailData, titleData, twoSided,
 } from "./model";
 import { OutlineItem, outlineTexts, parseOutline, toMarkdown } from "./outline";
 import {
@@ -2797,7 +2797,7 @@ export function resetLayout(view: ExcalidrawView, nodeId?: string) {
 
 /**
  * Gives the node's map another structure and resets its layout. The main topics keep the order they are
- * shown in: clockwise from the top right in a balanced map, otherwise the right side top to bottom, then the left.
+ * shown in, so switching back gives the same map (see switchedOrder).
  */
 export function setStructure(view: ExcalidrawView, nodeId: string, structure: Structure) {
   run(view, (tx, ea) => {
@@ -2806,9 +2806,7 @@ export function setStructure(view: ExcalidrawView, nodeId: string, structure: St
     if (!r || !settled) return;
     dropOffsets(tx, [...settled.nodes.values()]);
     const map = buildMap(tx.live(), r)!;
-    const right = map.root.children.filter((c) => c.side === "R");
-    const left = map.root.children.filter((c) => c.side === "L");
-    renumber(tx, structure === "balanced" ? [...right, ...left.reverse()] : [...right, ...left]);
+    renumber(tx, switchedOrder(map.root, structure));
     tx.patch(r, { customData: { ...map.root.el.customData, [KEY]: { ...map.root.data, structure } } });
     layoutMap(tx, ea, r);
   });
