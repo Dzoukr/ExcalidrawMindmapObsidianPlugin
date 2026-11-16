@@ -38,7 +38,10 @@ export function offer(host: HTMLElement, kind: string, label: string, title: str
   let row = host.querySelector<HTMLElement>(`:scope > .${ROW}`);
   if (!row) {
     row = host.createDiv({ cls: ROW });
-    row.createSpan({ cls: `${ROW}-label`, text: "Use this drawing for" });
+    // On a phone, the part of the label in its own span goes, to keep the row one line.
+    const label = row.createSpan({ cls: `${ROW}-label`, text: "Use " });
+    label.createSpan({ cls: `${ROW}-label-long`, text: "this drawing " });
+    label.appendText("for");
   }
   let plain = choice(row, PLAIN);
   if (!plain) {

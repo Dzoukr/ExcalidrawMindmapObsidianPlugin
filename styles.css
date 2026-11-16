@@ -302,3 +302,41 @@ body.is-phone .mm-btn svg {
   font-weight: var(--font-normal);
   color: var(--text-muted);
 }
+
+/* Clear Excalidraw's bottom toolbar on phones and tablets. */
+body.is-mobile .dzoukr-diagram-chooser {
+  bottom: 72px;
+}
+
+/* Phones: Excalidraw's tool and property bars fill the bottom, so the row docks at the top. It is one compact line,
+   its label shortened, that scrolls sideways when the choices still don't fit. */
+body.is-phone .dzoukr-diagram-chooser {
+  top: 72px;
+  bottom: auto;
+  max-width: calc(100% - 8px);
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  gap: 4px;
+  padding: 2px 2px 2px 8px;
+}
+
+body.is-phone .dzoukr-diagram-chooser > * {
+  flex-shrink: 0;
+}
+
+body.is-phone .dzoukr-diagram-chooser-label {
+  white-space: nowrap;
+}
+
+body.is-phone .dzoukr-diagram-chooser-label-long {
+  display: none;
+}
+
+body.is-phone .dzoukr-diagram-choice {
+  height: 30px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
